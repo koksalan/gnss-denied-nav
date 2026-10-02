@@ -105,6 +105,32 @@ Ground truth comes from SITL's `SIMSTATE`.
   (wind is unobservable without GNSS). The control run is optimistic.
 - Flat terrain is assumed (planar PnP); fine for the plains here, not for mountains.
 
+## Results — Sprint 3 (in progress): does visual pose hold on real images?
+
+PnP pose on **real** UAV-VisLoc photos (matched to the map around the labelled position, so only pose estimation
+is tested), compared with the dataset's attitude labels (Omega/Kappa) and height. Plains flights only, because
+`height` is above sea level: 03, 04 (Taizhou), 09 (Huzhou), ~80–110 images each.
+(`scripts/eval_pose_real.py`, `scripts/selfcalib_real.py`)
+
+| flight | height error (PnP vs label) | labelled tilt (median) | tilt error, raw | tilt error after mount calibration* |
+|---|---|---|---|---|
+| 03 | −0.9 m (0.5 %) | 1.45° | 1.3° / 1.8° | 1.4° / 1.3° |
+| 04 | −0.6 m (0.5 %) | 2.77° | 1.3° / 1.7° | 1.3° / 1.0° |
+| 09 | −0.8 m (0.5 %) | 1.73° | 1.3° / 2.0° | 1.1° / 1.2° |
+
+*tilt errors are pitch / roll. *Constant mount offset estimated on the first 30 % of each flight (in a real
+system: while GNSS is still healthy), evaluated on the remaining 70 %.*
+
+- **Visual height is validated on real data** (0.5 %): usable to correct barometric drift without GNSS.
+- **Single-image tilt is not**: ~1.2° on real images vs 0.06° in simulation. The camera intrinsics are unknown and,
+  for a near-nadir camera, a small tilt and a principal-point offset produce almost the same image
+  (120 px of principal-point shift ≈ 1.7° of tilt). Self-calibrating the camera with the ground as a planar target
+  (Zhang's method) is **degenerate** for near-nadir views at constant height: focal length drifted from ~4 000 px
+  to 5 000–10 500 px. 
+- Consequence for the real system: visual tilt is about as uncertain as a GNSS-denied EKF attitude (1–3°), so it
+  should be **fused over time** with the IMU (vision bounds the slow drift, the IMU keeps it smooth) rather than
+  used frame by frame. The closed-loop PnP result of Sprint 2 relied on perfectly known simulated intrinsics.
+
 ## Reproduce
 
 ```bash
