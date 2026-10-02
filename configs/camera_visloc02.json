@@ -1,0 +1,9 @@
+{
+  "source": "scripts/calibrate_camera.py on UAV-VisLoc flight 02 (18 of 32 matched)",
+  "focal_px": 4279.4,
+  "north_up_ccw_deg": "heading_sign * Phi1 + heading_offset_deg",
+  "heading_sign": -1,
+  "heading_offset_deg": -0.25,
+  "heading_resid_median_deg": 2.46,
+  "gt_center_offset_median_m": 11.4
+}

@@ -1,0 +1,11 @@
+# gdnav: realistic navigation for the GNSS-denied experiments
+# Real EKF3 instead of the simulator-truth AHRS (type 10), otherwise losing GPS would change nothing.
+AHRS_EKF_TYPE 3
+EK3_ENABLE 1
+# GPS1 = simulated GNSS receiver (gets jammed). GPS2 = visual localizer via MAVLink GPS_INPUT: it is enabled
+# in flight by sim/visual_gps.py (GPS2_TYPE 14), because a nadir camera cannot localize on the ground and an
+# unhealthy GPS2 would block arming.
+GPS1_TYPE 1
+GPS2_TYPE 0
+GPS_AUTO_SWITCH 1
+GPS_PRIMARY 0
