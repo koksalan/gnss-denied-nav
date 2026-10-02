@@ -8,16 +8,17 @@ The tile database is built once at start-up from the satellite map of the operat
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
-import math
-
+import cv2
 import numpy as np
 import torch
 
 from .embed import DinoEmbedder, embed_images
 from .geo import SatelliteMap, haversine_m, meters_per_degree
-from .query import Camera, apply_circle, make_query
+from .pose import intrinsics, solve_pose
+from .query import Camera, apply_circle, make_query, query_warp
 from .rerank import Fix, Reranker
 
 
@@ -44,6 +45,7 @@ class LocalizerConfig:
     track_radius_m: float = 400.0
     min_inliers: int = 25
     max_tilt_deg: float = 25.0       # body-fixed camera: beyond this the view is too oblique to trust
+    pose: str = "pnp"                # "pnp": camera pose from the matches; "boresight": correct with IMU attitude
     model: str = "facebook/dinov2-base"
     pool: str = "cls+gem"
 
@@ -110,13 +112,33 @@ class Localizer:
                 sim = torch.where(near, sim, torch.full_like(sim, -2.0))
                 mode, k = "track", self.cfg.track_k
         top = sim.topk(k).indices.cpu().numpy()
-        fine_gsd = self.reranker.gsd
-        qpx = int(round(self.cfg.patch_m / fine_gsd))
-        q_fine = make_query(frame, height_m, heading_deg, cam, qpx, self.cfg.patch_m)
-        fix = self.reranker.localize(q_fine, self.sat, self.tiles_ll[top])
+        rr = self.reranker
+        qpx = int(round(self.cfg.patch_m / rr.gsd))
+        M = query_warp(frame.shape, height_m, heading_deg, cam, qpx, self.cfg.patch_m)
+        q_fine = apply_circle(cv2.warpAffine(frame, M, (qpx, qpx), flags=cv2.INTER_AREA))
+        match = rr.best_match(q_fine, self.sat, self.tiles_ll[top])
+        if match is None:
+            lat, lon = self.tiles_ll[top[0]]
+            return Fix(float(lat), float(lon), 0, -1), mode
+
+        if self.cfg.pose == "pnp":
+            # inlier matches back to raw-image pixels and to ground meters (east, north) around the crop center
+            raw = cv2.transform(match.query_pts[None].astype(np.float64), cv2.invertAffineTransform(M))[0]
+            half = match.crop_px / 2
+            ground = np.c_[(match.crop_pts[:, 0] - half) * rr.gsd, -(match.crop_pts[:, 1] - half) * rr.gsd]
+            pose = solve_pose(raw, ground, intrinsics(cam.focal_px, frame.shape[1], frame.shape[0]))
+            if pose is not None:
+                e, n, up = pose.center_enu
+                lat = match.crop_ll[0] + n / self._mpd[0]
+                lon = match.crop_ll[1] + e / self._mpd[1]
+                extra = dict(height_m=float(up), off_nadir_deg=pose.off_nadir_deg, reproj_px=pose.reproj_px)
+                return Fix(float(lat), float(lon), min(match.inliers, pose.inliers), match.rank, extra), mode
+            # PnP failed (degenerate matches): fall through to the IMU-attitude correction
+
+        c = match.A @ np.array([qpx / 2, qpx / 2, 1.0])
+        plat, plon = rr.crop_px_to_latlon(self.sat, match, c[0], c[1])
         dn, de = boresight_offset_ne(height_m, roll_deg, pitch_deg, heading_deg)
-        fix.lat, fix.lon = fix.lat - dn / self._mpd[0], fix.lon - de / self._mpd[1]
-        return fix, mode
+        return Fix(float(plat) - dn / self._mpd[0], float(plon) - de / self._mpd[1], match.inliers, match.rank), mode
 
 
 def error_m(fix: Fix, lat: float, lon: float) -> float:

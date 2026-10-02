@@ -16,14 +16,21 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from gz.msgs10.clock_pb2 import Clock
 from gz.msgs10.image_pb2 import Image
 from gz.transport13 import Node
 from pymavlink import mavutil
 
 
 class LatestFrame:
+    """Latest camera image with its wall-clock receive time and its SIMULATION timestamp.
+
+    The simulator can run slower than real time (rendering + GPU load), so anything physical
+    (velocity, latency x speed) must use simulation time, not the wall clock.
+    """
+
     def __init__(self, topic: str = "/nadir_cam"):
-        self.lock, self.frame, self.stamp = threading.Lock(), None, 0.0
+        self.lock, self.frame, self.stamp, self.sim_stamp = threading.Lock(), None, 0.0, 0.0
         self.node = Node()
         if not self.node.subscribe(Image, topic, self._cb):
             raise RuntimeError(f"cannot subscribe {topic}")
@@ -32,10 +39,28 @@ class LatestFrame:
         arr = np.frombuffer(msg.data, np.uint8).reshape(msg.height, msg.width, 3).copy()
         with self.lock:
             self.frame, self.stamp = arr, time.time()
+            self.sim_stamp = msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9
 
     def get(self):
+        """(frame, wall_time, sim_time)"""
         with self.lock:
-            return self.frame, self.stamp
+            return self.frame, self.stamp, self.sim_stamp
+
+
+class SimClock:
+    """Current simulation time from Gazebo's world clock topic."""
+
+    def __init__(self, world: str):
+        self.sim = 0.0
+        self.node = Node()
+        if not self.node.subscribe(Clock, f"/world/{world}/clock", self._cb):
+            raise RuntimeError("cannot subscribe clock")
+
+    def _cb(self, msg: Clock):
+        self.sim = msg.sim.sec + msg.sim.nsec * 1e-9
+
+    def now(self) -> float:
+        return self.sim
 
 
 class AutopilotState:
@@ -80,7 +105,7 @@ def main():
     rows = []
     while len(rows) < args.n:
         time.sleep(args.every)
-        frame, stamp = cam.get()
+        frame, stamp, _ = cam.get()
         st = ap_state.snapshot()
         if frame is None or st is None or st["rel_alt_m"] < args.min_alt or time.time() - stamp > 0.5:
             continue

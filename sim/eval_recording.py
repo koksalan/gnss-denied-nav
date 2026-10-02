@@ -35,6 +35,10 @@ def main():
     ap.add_argument("--world", default="sim/gz/worlds/visloc03.json")
     ap.add_argument("--weights", default="outputs/finetune/s1/best.pt")
     ap.add_argument("--patch-m", type=float, default=250.0)
+    ap.add_argument("--pose", choices=["pnp", "boresight"], default="pnp")
+    ap.add_argument("--pitch-bias", type=float, default=0.0, help="deg added to the recorded attitude (IMU error)")
+    ap.add_argument("--roll-bias", type=float, default=0.0)
+    ap.add_argument("--tag", default=None)
     args = ap.parse_args()
 
     rec, w = Path(args.rec), json.loads(Path(args.world).read_text())
@@ -42,7 +46,7 @@ def main():
     m_lat, m_lon = meters_per_degree(w["lat0"])
     half = w["extent_m"] / 2
     bounds = (w["lat0"] - half / m_lat, w["lon0"] - half / m_lon, w["lat0"] + half / m_lat, w["lon0"] + half / m_lon)
-    loc = Localizer(VisLocFlight(w["flight"]).sat, LocalizerConfig(patch_m=args.patch_m), args.weights,
+    loc = Localizer(VisLocFlight(w["flight"]).sat, LocalizerConfig(patch_m=args.patch_m, pose=args.pose), args.weights,
                     bounds_ll=bounds)
     print(f"database: {len(loc.tiles_ll)} tiles")
 
@@ -64,24 +68,30 @@ def main():
     for i, r in enumerate(meta):
         t0 = time.time()
         fix, mode = loc.localize(load(rec, i, meta), r["rel_alt_m"], r["yaw_deg"], cam, prior,
-                                 roll_deg=r["roll_deg"], pitch_deg=r["pitch_deg"])
+                                 roll_deg=r["roll_deg"] + args.roll_bias, pitch_deg=r["pitch_deg"] + args.pitch_bias)
         dt = time.time() - t0
         conf = fix.inliers >= loc.cfg.min_inliers
         if mode != "tilted":                       # a skipped (banked) frame keeps the previous prior
             prior = (fix.lat, fix.lon) if conf else None
-        rows.append(dict(file=r["file"], mode=mode, inliers=fix.inliers, confident=conf,
-                         err_m=error_m(fix, r["true_lat"], r["true_lon"]), ms=1000 * dt, yaw=r["yaw_deg"]))
+        rows.append(dict(file=r["file"], mode=mode, inliers=fix.inliers, confident=conf, fix_lat=fix.lat, fix_lon=fix.lon,
+                         err_m=error_m(fix, r["true_lat"], r["true_lon"]), ms=1000 * dt, yaw=r["yaw_deg"],
+                         height_err_m=fix.extra.get("height_m", np.nan) - r["rel_alt_m"],
+                         off_nadir_deg=fix.extra.get("off_nadir_deg", np.nan),
+                         true_tilt_deg=float(np.hypot(r["roll_deg"], r["pitch_deg"]))))
     df = pd.DataFrame(rows)
     df.loc[df["mode"] == "tilted", "err_m"] = np.nan
-    df.to_csv(rec / "localization.csv", index=False)
+    tag = args.tag or f"{args.pose}_p{args.pitch_bias:g}_r{args.roll_bias:g}"
+    df.to_csv(rec / f"localization_{tag}.csv", index=False)
     c = df[df.confident]
     summary = dict(frames=len(df), confident=float(df.confident.mean()), median_err_m=float(c.err_m.median()),
                    p95_err_m=float(c.err_m.quantile(0.95)), max_err_m=float(c.err_m.max()),
                    track_frames=int((df["mode"] == "track").sum()), skipped_tilted=int((df["mode"] == "tilted").sum()),
                    ms_global=float(df.ms[df["mode"] == "global"].median()),
                    ms_track=float(df.ms[df["mode"] == "track"].median()) if (df["mode"] == "track").any() else None,
-                   heading_sign=cam.heading_sign, heading_offset=cam.heading_offset_deg)
-    (rec / "localization_summary.json").write_text(json.dumps(summary, indent=2))
+                   heading_sign=cam.heading_sign, heading_offset=cam.heading_offset_deg,
+                   height_err_median_m=float(c.height_err_m.abs().median()),
+                   tilt_err_median_deg=float((c.off_nadir_deg - c.true_tilt_deg).abs().median()))
+    (rec / f"localization_summary_{tag}.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
 
 

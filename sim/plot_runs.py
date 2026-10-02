@@ -15,8 +15,9 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-LABELS = {"control": "GNSS jammed, no visual GPS", "visual": "visual GPS (EKF attitude)",
-          "visual_trueatt": "visual GPS (true attitude)"}
+LABELS = {"control": "GNSS jammed, no visual GPS", "visual": "visual GPS, image-center + IMU attitude correction",
+          "visual_trueatt": "visual GPS, IMU attitude correction (true attitude)",
+          "visual_pnp": "visual GPS, PnP pose (no IMU attitude)"}
 
 
 def load(tag: str) -> pd.DataFrame:

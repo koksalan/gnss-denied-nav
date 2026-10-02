@@ -44,18 +44,22 @@ def apply_circle(img: np.ndarray) -> np.ndarray:
     return out
 
 
-def make_query(img: np.ndarray, height_m: float, heading_deg: float, cam: Camera,
+def query_warp(img_shape: tuple[int, ...], height_m: float, heading_deg: float, cam: Camera,
                out_px: int, patch_m: float) -> np.ndarray:
-    """North-up, `patch_m`-wide square at `patch_m / out_px` m/px, centered on the photo center."""
-    target_gsd = patch_m / out_px
-    scale = cam.gsd(height_m) / target_gsd
-    h, w = img.shape[:2]
-    # one warp: rotate around the photo center, scale to target GSD, move center to output center
+    """2x3 affine: raw photo px -> north-up patch px (rotate about the photo center, scale, recenter)."""
+    scale = cam.gsd(height_m) / (patch_m / out_px)
+    h, w = img_shape[:2]
     m = cv2.getRotationMatrix2D((w / 2, h / 2), cam.north_up_ccw(heading_deg), scale)
     m[0, 2] += out_px / 2 - w / 2
     m[1, 2] += out_px / 2 - h / 2
-    patch = cv2.warpAffine(img, m, (out_px, out_px), flags=cv2.INTER_AREA)
-    return apply_circle(patch)
+    return m
+
+
+def make_query(img: np.ndarray, height_m: float, heading_deg: float, cam: Camera,
+               out_px: int, patch_m: float) -> np.ndarray:
+    """North-up, `patch_m`-wide square at `patch_m / out_px` m/px, centered on the photo center."""
+    m = query_warp(img.shape, height_m, heading_deg, cam, out_px, patch_m)
+    return apply_circle(cv2.warpAffine(img, m, (out_px, out_px), flags=cv2.INTER_AREA))
 
 
 def max_patch_m(img_shape: tuple[int, int], height_m: float, cam: Camera) -> float:

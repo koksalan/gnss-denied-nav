@@ -3,8 +3,8 @@
 Localize a UAV **without GPS** by matching its downward camera against a satellite map, then feed the
 position to the autopilot (ArduPilot) so the mission continues when GNSS is jammed.
 
-> Status: **Sprint 1 done** (visual localization on real UAV imagery). Sprint 2 (closed-loop ArduPilot SITL +
-> Gazebo with GPS jamming) in progress.
+> Status: **Sprint 1 done** (visual localization on real UAV imagery) · **Sprint 2 done** (closed loop in
+> ArduPilot SITL + Gazebo: GNSS jammed, the aircraft keeps flying on visual position + visual attitude).
 
 ![match example](docs/match_example.jpg)
 *Unseen test flight 11. Top: 291 consistent matches → confident fix. Bottom: season change between photo and
@@ -60,6 +60,51 @@ Fine-tuning: last 4 DINOv2 blocks, symmetric InfoNCE, in-batch negatives from th
 - **Heading convention.** Rotating the photo by `-Phi1` makes it north-up on every flight (residual 1–8°),
   recovered from data rather than assumed.
 
+## Results — Sprint 2: closed loop, GNSS jammed
+
+[Demo video (docs/demo.mp4)](docs/demo.mp4): onboard nadir camera (left) and the satellite map with the true
+track (white) and visual fixes (green), recorded in the simulator.
+
+**Setup.** Gazebo Harmonic world whose ground is the flight-03 satellite map (4 × 4 km, a *test* region never
+used in training), ArduPlane SITL flying a Zephyr with a nadir camera (1280×854, 52° HFOV) on a 2.4 km square
+patrol at 400 m. The autopilot runs a real **EKF3** (the stock Gazebo config uses simulator-truth attitude, which
+would make GPS loss meaningless). GPS1 is the simulated GNSS receiver; **GPS2 is our visual localizer**, sent as
+MAVLink `GPS_INPUT`. 90 s after the visual node starts, GPS1 is switched off and the patrol continues for 6.5 min.
+Ground truth comes from SITL's `SIMSTATE`.
+
+| run (6.5 min after jamming) | EKF error median | p95 | max | at end | visual fix error |
+|---|---|---|---|---|---|
+| GNSS jammed, no visual GPS (dead reckoning) | 9.1 m | 58.9 m | 67.5 m | **67.5 m, growing** | – |
+| visual GPS, image-center fix + IMU attitude correction | 25.3 m | 92.9 m | 218.2 m | 25.3 m | 20.4 m |
+| **visual GPS, PnP pose (position + attitude from the image)** | **6.6 m** | **12.6 m** | **20.8 m** | **9.1 m** | **4.1 m** |
+
+![GNSS jamming](docs/gnss_jamming.png)
+
+### What the closed loop taught us
+1. **Attitude, not matching, was the bottleneck.** With a body-fixed camera the image center is not below the
+   aircraft when it pitches or banks. Correcting this with the autopilot's attitude works while GPS is healthy,
+   but without GPS the EKF attitude drifts by 1–3° — at 400 m that is 9–19 m of position error. Feeding the
+   simulator's *true* attitude instead cut the visual fix error from 20.5 m to 4.5 m, which isolated the cause.
+2. **…and it is a feedback loop.** Wrong attitude → biased visual fix → the EKF fuses it → attitude gets worse.
+   With IMU-attitude correction the EKF error oscillates up to 218 m (orange track zig-zags around the route).
+3. **PnP removes the dependency.** Hundreds of image↔map correspondences give a full camera pose (planar PnP,
+   IPPE + LM refinement): position, height above ground and tilt — no IMU attitude needed. Offline on a recorded
+   flight with a 2° pitch error injected into the IMU attitude, image-center correction degrades from 4.7 m to
+   15.4 m median error, PnP stays at **4.3 m**; visual tilt error **0.06°**, visual height error **0.5 m**.
+4. **Time is physical.** The simulator ran at ~1/3 real time under camera rendering + GPU load. Velocity and
+   latency computed from the wall clock under-stated the speed 3×, so the EKF fused stale, slow fixes and kept the
+   aircraft ~28 m behind. Using simulation timestamps (and projecting each fix forward by its latency) brought
+   the EKF error from 27.9 m to 6.6 m median. On real hardware there is one clock, but the latency projection
+   still matters: ~0.75 s of processing at 20 m/s is 15 m.
+5. **Banked turns are skipped** (> 25° tilt): the oblique view matches poorly; the EKF coasts on the IMU.
+
+### Honest limits of this simulation
+- The ground texture *is* the reference map, so matching is easier than reality. The real-image difficulty is
+  measured in Sprint 1; Sprint 3 will texture the world with imagery from a different source/date.
+- No wind and an idealized IMU, so dead reckoning drifts far less than on a real fixed-wing without GPS
+  (wind is unobservable without GNSS). The control run is optimistic.
+- Flat terrain is assumed (planar PnP); fine for the plains here, not for mountains.
+
 ## Reproduce
 
 ```bash
@@ -71,11 +116,21 @@ bash   scripts/run_sprint1.sh                           # baseline, fine-tune, e
 python scripts/visualize_match.py --flight 11 --idx 150 400
 ```
 
-Simulator setup (WSL2 / Ubuntu 24.04): `sim/setup_root.sh` (Gazebo Harmonic + system packages, as root) then
-`sim/setup_user.sh` (ArduPlane SITL + ardupilot_gazebo). `sim/smoke_sitl.sh` checks the MAVLink link.
+Simulator setup (WSL2 / Ubuntu 24.04): `sim/setup_root.sh` (Gazebo Harmonic + system packages, as root), then
+`sim/setup_user.sh` (ArduPlane SITL + ardupilot_gazebo) and `sim/setup_ai.sh` (torch + matchers inside WSL).
+`sim/smoke_sitl.sh` checks the MAVLink link.
+
+```bash
+python sim/make_world.py --zephyr-sdf <ardupilot_gazebo>/models/zephyr_with_ardupilot/model.sdf  # Windows/WSL
+bash sim/run_experiment.sh control --no-send          # GNSS jammed, no visual GPS
+bash sim/run_experiment.sh visual_pnp --pose pnp      # visual GPS with PnP pose
+GUI=1 bash sim/run_experiment.sh visual_pnp --pose pnp  # same, with the Gazebo window (slower)
+python sim/plot_runs.py control visual visual_pnp
+python sim/eval_recording.py --rec outputs/sim_rec/run2 --pose pnp --pitch-bias 2   # offline ablation
+```
 
 ## Roadmap
 - [x] Sprint 1 — visual localization on real imagery (retrieval + fine-tuning + LightGlue, confidence)
-- [ ] Sprint 2 — Gazebo world textured with the satellite map, downward camera, `GPS_INPUT` to ArduPlane, GPS-jamming scenario
-- [ ] Sprint 3 — learned fusion with IMU (GRU vs. Kalman baseline), visual attitude estimation, runway detection for landing
+- [x] Sprint 2 — closed loop in ArduPlane SITL + Gazebo: visual GPS via `GPS_INPUT`, GNSS jamming, PnP visual pose
+- [ ] Sprint 3 — realistic sim (different imagery source, wind), learned fusion with IMU (GRU vs. Kalman), runway detection + visual landing
 - [ ] Sprint 4 — ONNX/TensorRT latency, demo video, model release
