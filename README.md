@@ -127,10 +127,19 @@ Ground truth comes from SITL's `SIMSTATE`.
 | 18.5 min jammed, real-imagery world, sensor errors | EKF error median | p95 | max | at end |
 |---|---|---|---|---|
 | no visual GPS (dead reckoning) | 498 m | 758 m | 840 m | **840 m, growing** |
-| **visual GPS: PnP + consistency gate, position-only** | **10.6 m** | **50.6 m** | **94 m** | 43 m |
+| visual GPS: PnP + consistency gate, position-only (1.0 fix/s, 0.9 s latency) | 10.6 m | 50.6 m | 94 m | 43 m |
+| **same, fast path (24 fixes/s, 0.18 s latency)** | **6.3 m** | **28.8 m** | **84 m** | 17 m |
 
-Visual fix error: **10.9 m median over real drone photos** (p95 29.5 m, 80 % of frames accepted) vs. 5.2 m over the
-satellite fallback. 2 of 1 155 sent fixes were > 50 m off. Single run per configuration.
+Visual fix error: **~11–12 m median over real drone photos** (p95 ~30 m, 72–80 % of frames accepted) vs. ~5 m over the
+satellite fallback; ~0.15 % of sent fixes were > 50 m off. With the fast path the EKF error over drone-photo ground
+is 12.2 m median (17.7 m before) and 4.7 m over the satellite fallback. Single run per configuration.
+
+**Speed.** Profiling a 246 ms fix showed the time was not in the networks: re-reading the GeoTIFF for every candidate
+(79 ms, far worse through WSL's /mnt/c) and re-running SuperPoint on the same map crops (57 ms). Pre-flight map
+preparation (`gdnav/mapfeatures.py`: the area map in RAM + SuperPoint keypoints computed once, 13 s for 4.6 × 4.6 km)
+and single-window tracking (one fp16 LightGlue call around the prior, no retrieval) give **33 ms per tracking fix
+(7.2×) with unchanged accuracy** on 160 real-imagery frames (median 7.4 vs 7.0 m, p95 28.9 vs 32.2 m;
+`scripts/compare_fast.py`); global relocalization 444 → 159 ms.
 
 ### What it took (each item was a failure first)
 1. **Wrong-but-confident matches.** On real imagery 2.6 % of confident fixes were > 50 m off, and one triggered an
@@ -229,5 +238,6 @@ python sim/plot_runs.py gnss_jamming_realistic.png visloc03_real err_control err
 - [x] Sprint 2 — closed loop in ArduPlane SITL + Gazebo: visual GPS via `GPS_INPUT`, GNSS jamming, PnP visual pose
 - [x] Sprint 3a — real-image pose validation, realistic sim (drone-photo ground, airspeed, sensor errors), consistency gate, robust EKF integration
 - [x] Sprint 3b.1 — learned fix-confidence model vs. rule gate (negative result: rules kept)
-- [ ] Sprint 3b — speed (ONNX/TensorRT), localizability-aware route planning (A* vs RL), target detection + GNSS-free target geolocation, oblique matching in turns, visual landing
+- [x] Sprint 3b.2 — speed: pre-flight map features + single-window tracking (7× faster, EKF median 10.6 → 6.3 m)
+- [ ] Sprint 3b — localizability-aware route planning (A* vs RL), target detection + GNSS-free target geolocation, oblique matching in turns, visual landing
 - [ ] Sprint 4 — ONNX/TensorRT latency, demo video, model release

@@ -19,7 +19,8 @@ LABELS = {"control": "GNSS jammed, no visual GPS", "visual": "visual GPS, image-
           "visual_trueatt": "visual GPS, IMU attitude correction (true attitude)",
           "visual_pnp": "visual GPS, PnP pose (no IMU attitude)",
           "err_control": "GNSS jammed, no visual GPS (airspeed error + IMU bias)",
-          "err_gated": "visual GPS, PnP + consistency gate (same errors)"}
+          "err_gated": "visual GPS, PnP + consistency gate (same errors)",
+          "err_gated_fast": "visual GPS, fast path: 24 fixes/s (same errors)"}
 
 
 def load(tag: str) -> pd.DataFrame:
