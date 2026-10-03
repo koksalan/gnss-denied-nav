@@ -16,7 +16,7 @@ import torch
 from lightglue import LightGlue, SuperPoint
 from lightglue.utils import numpy_image_to_torch, rbd
 
-from .geo import SatelliteMap, haversine_m
+from .geo import SatelliteMap, haversine_m, meters_per_degree
 
 MAX_ROT_DEG = 15.0
 MAX_LOG_SCALE = math.log(1.25)
@@ -82,6 +82,43 @@ class Reranker:
             scored.append((int(keep.sum()), float(ilat), float(ilon)))
             if best is None or keep.sum() > best.inliers:
                 best = Match(rank, int(keep.sum()), A, pa[keep], pb[keep], (float(lat), float(lon)), spx,
+                             n_matches=len(m), n_query_kp=len(kq))
+        if best is not None:
+            b = max(scored)
+            others = [n for n, la, lo in scored if haversine_m(b[1], b[2], la, lo) > 40.0]
+            best.second_inliers = max(others) if others else 0
+        return best
+
+    @torch.no_grad()
+    def best_match_map(self, query: np.ndarray, mapf, centers_px: np.ndarray, size_px: int) -> Match | None:
+        """Like best_match, but candidate windows come from precomputed map features (no TIFF read, no SuperPoint)."""
+        fq = self._feats(query)
+        kq = rbd(fq)["keypoints"].cpu().numpy()
+        m_lat, m_lon = meters_per_degree(mapf.center_ll[0])
+        qc = np.array([query.shape[1] / 2, query.shape[0] / 2, 1.0])
+        best, scored = None, []
+        for rank, (cx, cy) in enumerate(centers_px, 1):
+            fs = mapf.window(cx, cy, size_px)
+            if fs["keypoints"].shape[1] < 8:
+                continue
+            with torch.autocast("cuda", dtype=torch.float16, enabled=self.device == "cuda"):
+                m = rbd(self.matcher({"image0": fq, "image1": fs}))["matches"].cpu().numpy()
+            if len(m) < 8:
+                continue
+            pa, pb = kq[m[:, 0]], fs["keypoints"][0].float().cpu().numpy()[m[:, 1]]
+            A, inl = cv2.estimateAffinePartial2D(pa, pb, method=cv2.RANSAC, ransacReprojThreshold=6.0)
+            if A is None:
+                continue
+            sc, rot = math.hypot(A[0, 0], A[1, 0]), math.degrees(math.atan2(A[1, 0], A[0, 0]))
+            if abs(rot) > MAX_ROT_DEG or abs(math.log(sc)) > MAX_LOG_SCALE:
+                continue
+            keep = inl.ravel() == 1
+            c = A @ qc
+            ilat, ilon = mapf.px_to_ll(cx - size_px / 2 + c[0], cy - size_px / 2 + c[1])
+            scored.append((int(keep.sum()), float(ilat), float(ilon)))
+            if best is None or keep.sum() > best.inliers:
+                clat, clon = mapf.px_to_ll(cx, cy)
+                best = Match(rank, int(keep.sum()), A, pa[keep], pb[keep], (float(clat), float(clon)), size_px,
                              n_matches=len(m), n_query_kp=len(kq))
         if best is not None:
             b = max(scored)

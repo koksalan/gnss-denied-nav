@@ -17,6 +17,7 @@ import torch
 
 from .embed import DinoEmbedder, embed_images
 from .geo import SatelliteMap, haversine_m, meters_per_degree
+from .mapfeatures import MapFeatures
 from .pose import intrinsics, solve_pose
 from .query import Camera, apply_circle, make_query, query_warp
 from .rerank import Fix, Reranker
@@ -46,6 +47,8 @@ class LocalizerConfig:
     min_inliers: int = 25
     max_tilt_deg: float = 25.0       # body-fixed camera: beyond this the view is too oblique to trust
     pose: str = "pnp"                # "pnp": camera pose from the matches; "boresight": correct with IMU attitude
+    fast: bool = True                # precomputed map features (needs bounds_ll); tracking = one window, no DINO
+    track_window_m: float = 600.0    # tracking search window around the prior (query footprint ~250 m)
     model: str = "facebook/dinov2-base"
     pool: str = "cls+gem"
 
@@ -85,6 +88,12 @@ class Localizer:
         m_lat, m_lon = meters_per_degree(float(self.tiles_ll[:, 0].mean()))
         self._tiles_m = torch.from_numpy(np.stack([self.tiles_ll[:, 0] * m_lat, self.tiles_ll[:, 1] * m_lon], 1)).to(device)
         self._mpd = (m_lat, m_lon)
+        self.mapf = None
+        if cfg.fast and bounds_ll is not None:
+            la0, lo0, la1, lo1 = bounds_ll
+            center = ((la0 + la1) / 2, (lo0 + lo1) / 2)
+            extent = max((la1 - la0) * m_lat, (lo1 - lo0) * m_lon) + 600.0     # margin for windows at the edge
+            self.mapf = MapFeatures.build(sat, center, extent, self.reranker.gsd, self.reranker.extractor, device)
 
     def _crop(self, cx, cy):
         p = self.cfg.px
@@ -101,31 +110,43 @@ class Localizer:
         """
         if math.hypot(roll_deg, pitch_deg) > self.cfg.max_tilt_deg:
             return Fix(float("nan"), float("nan"), 0, -1), "tilted"
-        q = make_query(frame, height_m, heading_deg, cam, self.cfg.px, self.cfg.patch_m)
-        e = torch.from_numpy(embed_images(self.model, [q], self.device)).to(self.device)[0]
-        sim = self.db @ e
-        mode, k = "global", self.cfg.rerank_k
-        if prior_ll is not None:
-            p = torch.tensor([prior_ll[0] * self._mpd[0], prior_ll[1] * self._mpd[1]], device=self.device)
-            near = (self._tiles_m - p).norm(dim=1) < self.cfg.track_radius_m
-            if near.any():
-                sim = torch.where(near, sim, torch.full_like(sim, -2.0))
-                mode, k = "track", self.cfg.track_k
-        topv, topi = sim.topk(k)
-        top = topi.cpu().numpy()
-        sims = topv.float().cpu().numpy()
         rr = self.reranker
         qpx = int(round(self.cfg.patch_m / rr.gsd))
         M = query_warp(frame.shape, height_m, heading_deg, cam, qpx, self.cfg.patch_m)
         q_fine = apply_circle(cv2.warpAffine(frame, M, (qpx, qpx), flags=cv2.INTER_AREA))
-        match = rr.best_match(q_fine, self.sat, self.tiles_ll[top])
+        mode, sims = "global", np.array([np.nan, np.nan])
+        if self.mapf is not None and prior_ll is not None:
+            # tracking: one window around the prior, precomputed map keypoints, no retrieval
+            mode = "track"
+            cxy = np.array(self.mapf.ll_to_px(*prior_ll), dtype=float)[None]
+            match = rr.best_match_map(q_fine, self.mapf, cxy, int(round(self.cfg.track_window_m / rr.gsd)))
+            top = None
+        else:
+            q = make_query(frame, height_m, heading_deg, cam, self.cfg.px, self.cfg.patch_m)
+            e = torch.from_numpy(embed_images(self.model, [q], self.device)).to(self.device)[0]
+            sim = self.db @ e
+            k = self.cfg.rerank_k
+            if prior_ll is not None:
+                p = torch.tensor([prior_ll[0] * self._mpd[0], prior_ll[1] * self._mpd[1]], device=self.device)
+                near = (self._tiles_m - p).norm(dim=1) < self.cfg.track_radius_m
+                if near.any():
+                    sim = torch.where(near, sim, torch.full_like(sim, -2.0))
+                    mode, k = "track", self.cfg.track_k
+            topv, topi = sim.topk(k)
+            top = topi.cpu().numpy()
+            sims = topv.float().cpu().numpy()
+            if self.mapf is not None:
+                cxy = np.stack(self.mapf.ll_to_px(self.tiles_ll[top, 0], self.tiles_ll[top, 1]), 1)
+                match = rr.best_match_map(q_fine, self.mapf, cxy, int(round(rr.search_m / rr.gsd)))
+            else:
+                match = rr.best_match(q_fine, self.sat, self.tiles_ll[top])
         feats = dict(mode=mode, sim_top1=float(sims[0]), sim_margin=float(sims[0] - sims[1]) if len(sims) > 1 else 0.0,
                      texture=texture_score(q_fine))
         if match is not None:
             feats.update(rank=match.rank, n_matches=match.n_matches, n_query_kp=match.n_query_kp,
                          inlier_ratio=match.inliers / max(match.n_matches, 1), second_inliers=match.second_inliers)
         if match is None:
-            lat, lon = self.tiles_ll[top[0]]
+            lat, lon = prior_ll if top is None else self.tiles_ll[top[0]]
             return Fix(float(lat), float(lon), 0, -1), mode
 
         if self.cfg.pose == "pnp":
@@ -143,7 +164,9 @@ class Localizer:
             # PnP failed (degenerate matches): fall through to the IMU-attitude correction
 
         c = match.A @ np.array([qpx / 2, qpx / 2, 1.0])
-        plat, plon = rr.crop_px_to_latlon(self.sat, match, c[0], c[1])
+        half = match.crop_px / 2                      # window/crop px -> meters around its center -> lat/lon
+        plat = match.crop_ll[0] - (c[1] - half) * rr.gsd / self._mpd[0]
+        plon = match.crop_ll[1] + (c[0] - half) * rr.gsd / self._mpd[1]
         dn, de = boresight_offset_ne(height_m, roll_deg, pitch_deg, heading_deg)
         return Fix(float(plat) - dn / self._mpd[0], float(plon) - de / self._mpd[1], match.inliers, match.rank,
                    dict(feats)), mode
