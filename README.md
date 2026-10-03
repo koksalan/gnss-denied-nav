@@ -4,7 +4,9 @@ Localize a UAV **without GPS** by matching its downward camera against a satelli
 position to the autopilot (ArduPilot) so the mission continues when GNSS is jammed.
 
 > Status: **Sprint 1 done** (visual localization on real UAV imagery) · **Sprint 2 done** (closed loop in
-> ArduPilot SITL + Gazebo: GNSS jammed, the aircraft keeps flying on visual position + visual attitude).
+> ArduPilot SITL + Gazebo) · **Sprint 3 in progress**: realistic simulation — the simulated camera sees real drone
+> photos, with sensor errors: over 18.5 min of GNSS jamming the error stays **≤ 94 m** with visual GPS vs **840 m
+> and growing** without it.
 
 ![match example](docs/match_example.jpg)
 *Unseen test flight 11. Top: 291 consistent matches → confident fix. Bottom: season change between photo and
@@ -99,13 +101,55 @@ Ground truth comes from SITL's `SIMSTATE`.
 5. **Banked turns are skipped** (> 25° tilt): the oblique view matches poorly; the EKF coasts on the IMU.
 
 ### Honest limits of this simulation
-- The ground texture *is* the reference map, so matching is easier than reality. The real-image difficulty is
-  measured in Sprint 1; Sprint 3 will texture the world with imagery from a different source/date.
-- No wind and an idealized IMU, so dead reckoning drifts far less than on a real fixed-wing without GPS
-  (wind is unobservable without GNSS). The control run is optimistic.
+- The ground texture *is* the reference map, so matching is easier than reality → addressed in Sprint 3
+  (drone-photo ground).
+- No wind and an idealized IMU, so dead reckoning drifts far less than on a real fixed-wing without GPS → Sprint 3
+  adds an airspeed scale error as a wind proxy (true wind is not supported by ArduPilot's JSON backend).
 - Flat terrain is assumed (planar PnP); fine for the plains here, not for mountains.
 
-## Results — Sprint 3 (in progress): does visual pose hold on real images?
+## Results — Sprint 3: a realistic simulation
+
+### 18.5 minutes of GNSS jamming over real drone imagery
+
+![realistic jamming](docs/gnss_jamming_realistic.png)
+
+**What changed vs. Sprint 2** (where the simulated ground *was* the reference map):
+- **Ground texture = real drone photos.** `sim/make_mosaic.py` registers 420 real UAV-VisLoc photos of flight 03
+  (2018, haze, other season) to the map and blends them into an orthomosaic; 61 % of the 4 × 4 km world is covered,
+  the rest falls back to the satellite map. The localizer still matches against the *Google satellite* map, so the
+  real domain gap is back: ~50–150 inliers instead of ~500, and the visual fix error is analysed separately over
+  drone-photo ground vs. satellite fallback (`sim/analyze_coverage.py`).
+- **Airspeed sensor on** (every real fixed-wing has one; the stock Gazebo Zephyr disables it).
+- **Sensor errors** (`sim/params/errors.parm`): ArduPilot's JSON/Gazebo backend has no wind support, and with a
+  perfect airspeed sensor and no wind a GNSS-denied EKF dead-reckons almost perfectly (31.7 m in 6.5 min). A +6 %
+  airspeed scale error plays the role of unknown wind (a persistent, unobservable speed error) plus small IMU biases.
+
+| 18.5 min jammed, real-imagery world, sensor errors | EKF error median | p95 | max | at end |
+|---|---|---|---|---|
+| no visual GPS (dead reckoning) | 498 m | 758 m | 840 m | **840 m, growing** |
+| **visual GPS: PnP + consistency gate, position-only** | **10.6 m** | **50.6 m** | **94 m** | 43 m |
+
+Visual fix error: **10.9 m median over real drone photos** (p95 29.5 m, 80 % of frames accepted) vs. 5.2 m over the
+satellite fallback. 2 of 1 155 sent fixes were > 50 m off. Single run per configuration.
+
+### What it took (each item was a failure first)
+1. **Wrong-but-confident matches.** On real imagery 2.6 % of confident fixes were > 50 m off, and one triggered an
+   EKF reset to a 250 m error. A **rule-based consistency gate** catches them because a wrong match rarely has a
+   consistent pose: PnP height vs. barometer (AUC 0.88), PnP tilt vs. IMU tilt (AUC 0.97), plus a minimum match
+   count. It rejected all 16 bad fixes of the run it was tuned on and let 1 of 393 through on a fresh run.
+2. **The gate can lock itself out.** It compares against the EKF attitude, which drifts when no fix arrives; then
+   it rejected *correct* fixes. **Degraded mode:** after 5 s without an accepted fix the tilt check is dropped and a
+   stricter match count is required (barometric height still checked).
+3. **Never lie about your accuracy.** Fixes were sent with a velocity from finite differences claimed at ±1 m/s;
+   on real imagery that velocity was off by 10–50 m/s. The EKF used it to estimate **wind** (GPS velocity −
+   airspeed), learned a fake wind, and when fixes paused it dead-reckoned with it: 2.7 km of divergence and a
+   50° attitude error.
+4. **ArduPilot keeps the last GPS velocity** when `GPS_INPUT` flags it as missing — after a tracking gap it fused a
+   30 s-old velocity from before a turn. Final design: **position-only** visual GPS (`EK3_SRC1_VELXY 0`), latency
+   projected with the EKF's own velocity, GPS week time driven by **simulation time** (used for jitter correction).
+5. Result: no divergence in 18.5 min; attitude error ≤ 7.7° (it reached 40–50° in the failed variants).
+
+### Does visual pose hold on real images?
 
 PnP pose on **real** UAV-VisLoc photos (matched to the map around the labelled position, so only pose estimation
 is tested), compared with the dataset's attitude labels (Omega/Kappa) and height. Plains flights only, because
@@ -153,10 +197,18 @@ bash sim/run_experiment.sh visual_pnp --pose pnp      # visual GPS with PnP pose
 GUI=1 bash sim/run_experiment.sh visual_pnp --pose pnp  # same, with the Gazebo window (slower)
 python sim/plot_runs.py control visual visual_pnp
 python sim/eval_recording.py --rec outputs/sim_rec/run2 --pose pnp --pitch-bias 2   # offline ablation
+
+# Sprint 3: realistic world (drone-photo ground) + sensor errors, one experiment per WSL session
+python sim/make_mosaic.py && python sim/make_world.py --name visloc03_real --texture outputs/mosaic/visloc03_mosaic.png --zephyr-sdf <...>
+WORLD=visloc03_real EXTRA_PARAMS=$PWD/sim/params/errors.parm bash sim/run_experiment.sh err_gated --pose pnp --duration 1200
+WORLD=visloc03_real EXTRA_PARAMS=$PWD/sim/params/errors.parm bash sim/run_experiment.sh err_control --no-send --duration 1200
+python sim/analyze_coverage.py err_gated
+python sim/plot_runs.py gnss_jamming_realistic.png visloc03_real err_control err_gated
 ```
 
 ## Roadmap
 - [x] Sprint 1 — visual localization on real imagery (retrieval + fine-tuning + LightGlue, confidence)
 - [x] Sprint 2 — closed loop in ArduPlane SITL + Gazebo: visual GPS via `GPS_INPUT`, GNSS jamming, PnP visual pose
-- [ ] Sprint 3 — realistic sim (different imagery source, wind), learned fusion with IMU (GRU vs. Kalman), runway detection + visual landing
+- [x] Sprint 3a — real-image pose validation, realistic sim (drone-photo ground, airspeed, sensor errors), consistency gate, robust EKF integration
+- [ ] Sprint 3b — learned fix-error model (replace hand-tuned gate/accuracy), oblique matching in turns, runway detection + visual landing
 - [ ] Sprint 4 — ONNX/TensorRT latency, demo video, model release

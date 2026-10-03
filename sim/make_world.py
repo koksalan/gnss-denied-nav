@@ -87,6 +87,9 @@ def main():
     ap.add_argument("--tile-px", type=int, default=2048)
     ap.add_argument("--zephyr-sdf", required=True, help="path to ardupilot_gazebo/models/zephyr_with_ardupilot/model.sdf")
     ap.add_argument("--elevation", type=float, default=5.0)
+    ap.add_argument("--texture", default=None,
+                    help="optional north-up ground image covering exactly the world extent (e.g. the drone-photo "
+                         "orthomosaic from sim/make_mosaic.py); default: the satellite map itself")
     args = ap.parse_args()
 
     fl = VisLocFlight(args.flight)
@@ -97,12 +100,20 @@ def main():
 
     visuals = []
     half = args.n * args.tile_m / 2
+    texture = None
+    if args.texture:
+        texture = cv2.cvtColor(cv2.imread(args.texture), cv2.COLOR_BGR2RGB)
+        tpx = texture.shape[0] / args.n                     # texture px per tile
     for r in range(args.n):          # rows north -> south
         for c in range(args.n):      # cols west -> east
             x = -half + (c + 0.5) * args.tile_m     # East
             y = half - (r + 0.5) * args.tile_m      # North
             lat, lon = args.lat0 + y / m_lat, args.lon0 + x / m_lon
-            img = fl.sat.crop(lat, lon, args.tile_m, args.tile_m / args.tile_px)
+            if texture is None:
+                img = fl.sat.crop(lat, lon, args.tile_m, args.tile_m / args.tile_px)
+            else:
+                img = texture[int(r * tpx):int((r + 1) * tpx), int(c * tpx):int((c + 1) * tpx)]
+                img = cv2.resize(img, (args.tile_px, args.tile_px), interpolation=cv2.INTER_LINEAR)
             name = f"tile_r{r}_c{c}"
             cv2.imwrite(str(mdir / "textures" / f"{name}.png"), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
             visuals.append(tile_visual(name, x, y, args.tile_m, f"model://{model}/textures/{name}.png"))
@@ -175,6 +186,7 @@ def main():
     (wdir / f"{args.name}.json").write_text(json.dumps(dict(
         flight=args.flight, lat0=args.lat0, lon0=args.lon0, elevation=args.elevation,
         extent_m=2 * half, camera=dict(CAMERA, focal_px=w / 2 / math.tan(fov / 2)),
+        texture=args.texture or "satellite",
     ), indent=2))
     print("world written to", wdir / f"{args.name}.sdf")
 

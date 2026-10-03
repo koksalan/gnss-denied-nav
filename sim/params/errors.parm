@@ -1,0 +1,9 @@
+# Sensor errors that make GNSS-denied dead reckoning realistic. ArduPilot's JSON/Gazebo backend has no wind
+# support, and with a perfect airspeed sensor and no wind the EKF dead-reckons almost perfectly. An airspeed scale
+# error is what unknown wind does to a GNSS-denied fixed-wing: a persistent, unobservable speed error.
+# Indicated airspeed = sqrt(SIM_ARSPD_RATIO / ARSPD_RATIO) * true: 2.24 vs 1.99 -> +6 % (~1.2 m/s at 20 m/s).
+SIM_ARSPD_RATIO 2.24
+# small IMU biases (the EKF estimates these; realism, not the dominant error)
+SIM_ACC1_BIAS_X 0.05
+SIM_ACC1_BIAS_Y -0.04
+SIM_GYR1_BIAS_Z 0.002

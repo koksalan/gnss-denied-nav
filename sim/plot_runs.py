@@ -17,7 +17,9 @@ import pandas as pd  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 LABELS = {"control": "GNSS jammed, no visual GPS", "visual": "visual GPS, image-center + IMU attitude correction",
           "visual_trueatt": "visual GPS, IMU attitude correction (true attitude)",
-          "visual_pnp": "visual GPS, PnP pose (no IMU attitude)"}
+          "visual_pnp": "visual GPS, PnP pose (no IMU attitude)",
+          "err_control": "GNSS jammed, no visual GPS (airspeed error + IMU bias)",
+          "err_gated": "visual GPS, PnP + consistency gate (same errors)"}
 
 
 def load(tag: str) -> pd.DataFrame:
@@ -29,9 +31,9 @@ def load(tag: str) -> pd.DataFrame:
     return d
 
 
-def main(tags: list[str]):
+def main(tags: list[str], out_name: str = "gnss_jamming.png", world: str = "visloc03"):
     runs = {t: load(t) for t in tags}
-    w = json.loads((ROOT / "sim/gz/worlds/visloc03.json").read_text())
+    w = json.loads((ROOT / f"sim/gz/worlds/{world}.json").read_text())
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(13, 5))
     summary = {}
     for tag, d in runs.items():
@@ -56,7 +58,7 @@ def main(tags: list[str]):
     a2.set(xlabel="east (m)", ylabel="north (m)", title="true ground track", aspect="equal")
     a2.legend(fontsize=8)
     fig.tight_layout()
-    out = ROOT / "docs" / "gnss_jamming.png"
+    out = ROOT / "docs" / out_name
     out.parent.mkdir(exist_ok=True)
     fig.savefig(out, dpi=130)
     (ROOT / "outputs" / "sim_runs" / "summary.json").write_text(json.dumps(summary, indent=2))
@@ -65,4 +67,8 @@ def main(tags: list[str]):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:] or ["control", "visual"])
+    args = sys.argv[1:] or ["control", "visual"]
+    if args[0].endswith(".png"):                  # optional: plot_runs.py <out.png> <world> tag1 tag2 ...
+        main(args[2:], args[0], args[1])
+    else:
+        main(args)

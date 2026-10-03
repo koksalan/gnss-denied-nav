@@ -26,7 +26,7 @@ echo $! > "$LOG/gz.pid"; echo "gazebo pid $!"
 . "$SIM_HOME/venv/bin/activate"
 cd "$LOG"
 "$SIM_HOME/ardupilot/Tools/autotest/sim_vehicle.py" -v ArduPlane -f gazebo-zephyr --model JSON \
-  --custom-location="$LAT,$LON,$ELEV,0" --add-param-file="$REPO/sim/params/gdnav.parm" \
+  --custom-location="$LAT,$LON,$ELEV,0" --add-param-file="$REPO/sim/params/gdnav.parm" ${EXTRA_PARAMS:+--add-param-file="$EXTRA_PARAMS"} \
   --no-mavproxy --no-rebuild -w > "$LOG/sitl.log" 2>&1 &
 echo $! > "$LOG/sitl.pid"; echo "sitl pid $!  (home $LAT,$LON)"
 # keep this shell alive while the simulator runs (WSL stops the distro when no session is left)

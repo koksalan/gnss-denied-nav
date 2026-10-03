@@ -9,3 +9,11 @@ GPS1_TYPE 1
 GPS2_TYPE 0
 GPS_AUTO_SWITCH 1
 GPS_PRIMARY 0
+# Airspeed sensor (every real fixed-wing has a pitot tube). The stock Gazebo Zephyr config disables it, which
+# makes GNSS-denied dead reckoning unrealistically poor. SITL derives it from the JSON velocity (no wind support).
+ARSPD_TYPE 100
+ARSPD_USE 1
+# Visual GPS supplies POSITION only. Its finite-difference velocity is too noisy on real imagery: the EKF used
+# it to estimate wind (GPS velocity - airspeed), learned a fake wind and diverged as soon as fixes paused.
+EK3_SRC1_VELXY 0
+EK3_SRC1_VELZ 0

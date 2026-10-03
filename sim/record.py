@@ -67,7 +67,7 @@ class AutopilotState:
     """Keeps the latest SIMSTATE / ATTITUDE / GLOBAL_POSITION_INT from a MAVLink link in a background thread."""
 
     def __init__(self, conn: str):
-        self.m = mavutil.mavlink_connection(conn, source_system=254)
+        self.m = mavutil.mavlink_connection(conn, source_system=254, retries=120)
         self.m.wait_heartbeat(timeout=30)
         self.m.mav.request_data_stream_send(self.m.target_system, self.m.target_component, 0, 10, 1)
         self.last: dict = {}
@@ -87,7 +87,8 @@ class AutopilotState:
                     true_roll_deg=math.degrees(s.roll), true_pitch_deg=math.degrees(s.pitch),
                     true_yaw_deg=math.degrees(s.yaw), yaw_deg=math.degrees(a.yaw),
                     roll_deg=math.degrees(a.roll), pitch_deg=math.degrees(a.pitch),
-                    rel_alt_m=g.relative_alt / 1000, ekf_lat=g.lat / 1e7, ekf_lon=g.lon / 1e7)
+                    rel_alt_m=g.relative_alt / 1000, ekf_lat=g.lat / 1e7, ekf_lon=g.lon / 1e7,
+                    ekf_vn=g.vx / 100, ekf_ve=g.vy / 100)
 
 
 def main():

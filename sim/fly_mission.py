@@ -57,7 +57,7 @@ def main():
     w = json.load(open(args.world))
     lat0, lon0 = w["lat0"], w["lon0"]
 
-    m = mavutil.mavlink_connection(args.conn, source_system=255)  # must equal SYSID_MYGCS or RC overrides are ignored
+    m = mavutil.mavlink_connection(args.conn, source_system=255, retries=120)  # sysid 255 = SYSID_MYGCS (RC override)
     m.wait_heartbeat(timeout=60)
     print("connected to system", m.target_system)
     m.mav.request_data_stream_send(m.target_system, m.target_component, M.MAV_DATA_STREAM_ALL, 4, 1)
