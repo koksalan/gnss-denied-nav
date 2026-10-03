@@ -23,6 +23,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "sim"))
+from gdnav.confidence import ConfidenceModel, fix_features  # noqa: E402
 from gdnav.geo import haversine_m, meters_per_degree  # noqa: E402
 from gdnav.localizer import Localizer, LocalizerConfig  # noqa: E402
 from gdnav.query import Camera  # noqa: E402
@@ -93,6 +94,8 @@ def main():
     ap.add_argument("--min-alt", type=float, default=200.0)
     ap.add_argument("--no-send", action="store_true", help="control run: jam GNSS but send no visual fixes")
     ap.add_argument("--no-gate", action="store_true", help="disable the consistency gate (ablation)")
+    ap.add_argument("--gate-model", default=None,
+                    help="learned confidence model (joblib) instead of the hand-written rules")
     ap.add_argument("--pose", choices=["pnp", "boresight"], default="pnp",
                     help="pnp: position+attitude from the image matches; boresight: correct with IMU attitude")
     ap.add_argument("--attitude", choices=["ekf", "true"], default="ekf",
@@ -111,6 +114,7 @@ def main():
     loc = None if args.no_send else Localizer(
         VisLocFlight(w["flight"]).sat, LocalizerConfig(patch_m=args.patch_m, pose=args.pose, rerank_k=25), str(ROOT / args.weights), bounds_ll=bounds)
     frames, ap_state, clock = LatestFrame(), AutopilotState(args.conn), SimClock(Path(args.world).stem)
+    model = ConfidenceModel(ROOT / args.gate_model) if args.gate_model else None
     m = ap_state.m
     set_param(m, "SIM_GPS1_ENABLE", 1)
     if not args.no_send:
@@ -125,7 +129,7 @@ def main():
     wr.writerow(["t", "jammed", "true_lat", "true_lon", "ekf_lat", "ekf_lon", "ekf_err_m",
                  "roll", "pitch", "yaw", "true_roll", "true_pitch", "true_yaw",
                  "fix_lat", "fix_lon", "fix_err_m", "inliers", "mode", "sent", "vis_height_m", "vis_off_nadir",
-                 "latency_s", "gate"])
+                 "latency_s", "gate", "p_bad", "acc_pred"])
     t0, jammed, prior = time.time(), False, None
     last_accept_sim = -1e9
     gps_epoch_base = time.time() - clock.now()          # GPS time = wall time at start + simulation seconds
@@ -151,7 +155,7 @@ def main():
         pre = "true_" if args.attitude == "true" else ""
         fix, mode = loc.localize(frame, st["rel_alt_m"], st[pre + "yaw_deg"], cam, prior,
                                  roll_deg=st[pre + "roll_deg"], pitch_deg=st[pre + "pitch_deg"])
-        sent, gate = 0, ""
+        sent, gate, p_bad, acc_pred = 0, "", "", ""
         if mode == "tilted":
             time.sleep(0.2)                                # banked turn: no fix, don't spin
         else:
@@ -159,9 +163,16 @@ def main():
             gate = "off"
             if conf and not args.no_gate:
                 degraded = clock.now() - last_accept_sim > 5.0
-                conf, gate = consistency_gate(fix, st["rel_alt_m"], st["roll_deg"], st["pitch_deg"], degraded)
-                if degraded and gate == "ok":
-                    gate = "ok_degraded"
+                if model is not None:
+                    feats = fix_features(fix, mode, st["rel_alt_m"], st["roll_deg"], st["pitch_deg"])
+                    if degraded:                 # drifting EKF attitude: let the model treat tilt as unknown
+                        feats["tilt_dev"] = float("nan")
+                    p_bad, acc_pred = model.predict(feats)
+                    conf, gate = p_bad < model.threshold, ("model_ok" if p_bad < model.threshold else "model_reject")
+                else:
+                    conf, gate = consistency_gate(fix, st["rel_alt_m"], st["roll_deg"], st["pitch_deg"], degraded)
+                if degraded and gate in ("ok", "model_ok"):
+                    gate += "_degraded"
             if conf:
                 prior, last_accept_sim = (fix.lat, fix.lon), clock.now()
             elif gate in ("off", ""):                      # genuinely lost: relocalize globally next frame
@@ -170,7 +181,12 @@ def main():
             if conf:
                 # velocity over a >= 1 s baseline: ~5 m fix noise would make frame-to-frame differences useless
                 # all timing in SIMULATION seconds (the sim may run slower than the wall clock)
-                acc = 8.0 if args.no_gate else accuracy_from_inliers(fix.inliers)
+                if args.no_gate:
+                    acc = 8.0
+                elif model is not None:
+                    acc = float(min(60.0, max(5.0, acc_pred)))      # learned q80 error as reported accuracy
+                else:
+                    acc = accuracy_from_inliers(fix.inliers)
                 # latency compensation: the fix is where the aircraft was when the frame was taken; project it to
                 # 'now' with the EKF's own (smooth, IMU + airspeed) velocity. No velocity is SENT: the EKF takes
                 # position only from GPS (EK3_SRC1_VELXY 0) because finite-difference visual velocity is too noisy.
@@ -184,7 +200,7 @@ def main():
         fix_err = float(haversine_m(st["true_lat"], st["true_lon"], fix.lat, fix.lon)) if fix.inliers else ""
         wr.writerow(row + [fix.lat, fix.lon, round(fix_err, 1) if fix_err != "" else "", fix.inliers, mode, sent,
                            fix.extra.get("height_m", ""), fix.extra.get("off_nadir_deg", ""),
-                           round(clock.now() - sim_stamp, 3), gate])
+                           round(clock.now() - sim_stamp, 3), gate, p_bad, acc_pred])
         if int(t) % 15 == 0:
             print(f"t={t:5.0f}s jammed={int(jammed)} ekf_err={ekf_err:6.1f} m  fix_err={fix_err} mode={mode}", flush=True)
             log.flush()

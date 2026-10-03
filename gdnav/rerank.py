@@ -16,7 +16,7 @@ import torch
 from lightglue import LightGlue, SuperPoint
 from lightglue.utils import numpy_image_to_torch, rbd
 
-from .geo import SatelliteMap
+from .geo import SatelliteMap, haversine_m
 
 MAX_ROT_DEG = 15.0
 MAX_LOG_SCALE = math.log(1.25)
@@ -41,6 +41,9 @@ class Match:
     crop_pts: np.ndarray          # Nx2 inlier keypoints in the crop
     crop_ll: tuple[float, float]  # crop center (lat, lon)
     crop_px: int                  # crop side in px (crop gsd = Reranker.gsd)
+    n_matches: int = 0            # LightGlue matches before RANSAC
+    n_query_kp: int = 0           # SuperPoint keypoints in the query
+    second_inliers: int = 0       # best inliers among candidates implying a DIFFERENT place (> 40 m away)
 
 
 class Reranker:
@@ -58,7 +61,7 @@ class Reranker:
         fq = self._feats(query)
         kq = rbd(fq)["keypoints"].cpu().numpy()
         spx = int(round(self.search_m / self.gsd))
-        best = None
+        best, scored = None, []                     # scored: (inliers, implied lat, implied lon) per valid candidate
         for rank, (lat, lon) in enumerate(candidates_ll, 1):
             fs = self._feats(sat.crop(lat, lon, self.search_m, self.gsd))
             m = rbd(self.matcher({"image0": fq, "image1": fs}))["matches"].cpu().numpy()
@@ -72,8 +75,18 @@ class Reranker:
             if abs(rot) > MAX_ROT_DEG or abs(math.log(s)) > MAX_LOG_SCALE:
                 continue
             keep = inl.ravel() == 1
+            c = A @ np.array([query.shape[1] / 2, query.shape[0] / 2, 1.0])
+            cx, cy = sat.latlon_to_px(lat, lon)
+            ilat, ilon = sat.px_to_latlon(cx + (c[0] - spx / 2) * self.gsd / sat.gsd_x,
+                                          cy + (c[1] - spx / 2) * self.gsd / sat.gsd_y)
+            scored.append((int(keep.sum()), float(ilat), float(ilon)))
             if best is None or keep.sum() > best.inliers:
-                best = Match(rank, int(keep.sum()), A, pa[keep], pb[keep], (float(lat), float(lon)), spx)
+                best = Match(rank, int(keep.sum()), A, pa[keep], pb[keep], (float(lat), float(lon)), spx,
+                             n_matches=len(m), n_query_kp=len(kq))
+        if best is not None:
+            b = max(scored)
+            others = [n for n, la, lo in scored if haversine_m(b[1], b[2], la, lo) > 40.0]
+            best.second_inliers = max(others) if others else 0
         return best
 
     def crop_px_to_latlon(self, sat: SatelliteMap, match: Match, x, y):

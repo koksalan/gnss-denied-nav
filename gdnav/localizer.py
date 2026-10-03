@@ -111,12 +111,19 @@ class Localizer:
             if near.any():
                 sim = torch.where(near, sim, torch.full_like(sim, -2.0))
                 mode, k = "track", self.cfg.track_k
-        top = sim.topk(k).indices.cpu().numpy()
+        topv, topi = sim.topk(k)
+        top = topi.cpu().numpy()
+        sims = topv.float().cpu().numpy()
         rr = self.reranker
         qpx = int(round(self.cfg.patch_m / rr.gsd))
         M = query_warp(frame.shape, height_m, heading_deg, cam, qpx, self.cfg.patch_m)
         q_fine = apply_circle(cv2.warpAffine(frame, M, (qpx, qpx), flags=cv2.INTER_AREA))
         match = rr.best_match(q_fine, self.sat, self.tiles_ll[top])
+        feats = dict(mode=mode, sim_top1=float(sims[0]), sim_margin=float(sims[0] - sims[1]) if len(sims) > 1 else 0.0,
+                     texture=texture_score(q_fine))
+        if match is not None:
+            feats.update(rank=match.rank, n_matches=match.n_matches, n_query_kp=match.n_query_kp,
+                         inlier_ratio=match.inliers / max(match.n_matches, 1), second_inliers=match.second_inliers)
         if match is None:
             lat, lon = self.tiles_ll[top[0]]
             return Fix(float(lat), float(lon), 0, -1), mode
@@ -131,14 +138,23 @@ class Localizer:
                 e, n, up = pose.center_enu
                 lat = match.crop_ll[0] + n / self._mpd[0]
                 lon = match.crop_ll[1] + e / self._mpd[1]
-                extra = dict(height_m=float(up), off_nadir_deg=pose.off_nadir_deg, reproj_px=pose.reproj_px)
+                extra = dict(height_m=float(up), off_nadir_deg=pose.off_nadir_deg, reproj_px=pose.reproj_px, **feats)
                 return Fix(float(lat), float(lon), min(match.inliers, pose.inliers), match.rank, extra), mode
             # PnP failed (degenerate matches): fall through to the IMU-attitude correction
 
         c = match.A @ np.array([qpx / 2, qpx / 2, 1.0])
         plat, plon = rr.crop_px_to_latlon(self.sat, match, c[0], c[1])
         dn, de = boresight_offset_ne(height_m, roll_deg, pitch_deg, heading_deg)
-        return Fix(float(plat) - dn / self._mpd[0], float(plon) - de / self._mpd[1], match.inliers, match.rank), mode
+        return Fix(float(plat) - dn / self._mpd[0], float(plon) - de / self._mpd[1], match.inliers, match.rank,
+                   dict(feats)), mode
+
+
+def texture_score(img: np.ndarray) -> float:
+    """Mean gradient magnitude of the (circle-masked) query: low over water / uniform fields = hard to localize."""
+    g = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    gx, gy = cv2.Sobel(g, cv2.CV_32F, 1, 0), cv2.Sobel(g, cv2.CV_32F, 0, 1)
+    mag = np.hypot(gx, gy)
+    return float(mag[g > 0].mean()) if (g > 0).any() else 0.0
 
 
 def error_m(fix: Fix, lat: float, lon: float) -> float:

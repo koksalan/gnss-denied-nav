@@ -149,6 +149,24 @@ satellite fallback. 2 of 1 155 sent fixes were > 50 m off. Single run per config
    projected with the EKF's own velocity, GPS week time driven by **simulation time** (used for jitter correction).
 5. Result: no divergence in 18.5 min; attitude error ≤ 7.7° (it reached 40–50° in the failed variants).
 
+### Learned confidence model: not better than the rules (negative result)
+`scripts/build_conf_dataset.py` recorded 800 frames over the real-imagery world (exact SIMSTATE labels, GNSS-denied
+attitude/baro noise injected) → 981 fixes with 15 features (match counts, inlier ratio, distinct-place runner-up,
+retrieval similarity/margin, texture, PnP reprojection, height/tilt consistency). A gradient-boosted classifier +
+quantile regressor (`scripts/train_conf_model.py`, spatial split west/east) was compared with the rule gate:
+
+| at the rule gate's acceptance rate (89.5 %) | bad fixes (> 30 m) let through | p95 error of accepted |
+|---|---|---|
+| rule gate (3 hand-written checks) | 10 | 21.2 m |
+| learned classifier (AUC 0.90) | 12 | 22.0 m |
+| match count alone (AUC 0.88) | 11 | 21.4 m |
+
+The bad fixes that pass are all 31–46 m, with *every* feature looking healthy (86–163 inliers, height within 4 m,
+tilt within 4°, no competing place) and all over drone-photo ground — most likely local registration error of the
+orthomosaic itself, i.e. of the test world, which no feature of the match can reveal. The learned q80 error is a
+slightly better reported accuracy (80 %-target coverage 69 % vs. 61 % for `5 + 600 / inliers`), not enough to
+justify a model in the loop. **The interpretable rule gate stays.**
+
 ### Does visual pose hold on real images?
 
 PnP pose on **real** UAV-VisLoc photos (matched to the map around the labelled position, so only pose estimation
@@ -210,5 +228,6 @@ python sim/plot_runs.py gnss_jamming_realistic.png visloc03_real err_control err
 - [x] Sprint 1 — visual localization on real imagery (retrieval + fine-tuning + LightGlue, confidence)
 - [x] Sprint 2 — closed loop in ArduPlane SITL + Gazebo: visual GPS via `GPS_INPUT`, GNSS jamming, PnP visual pose
 - [x] Sprint 3a — real-image pose validation, realistic sim (drone-photo ground, airspeed, sensor errors), consistency gate, robust EKF integration
-- [ ] Sprint 3b — learned fix-error model (replace hand-tuned gate/accuracy), oblique matching in turns, runway detection + visual landing
+- [x] Sprint 3b.1 — learned fix-confidence model vs. rule gate (negative result: rules kept)
+- [ ] Sprint 3b — speed (ONNX/TensorRT), localizability-aware route planning (A* vs RL), target detection + GNSS-free target geolocation, oblique matching in turns, visual landing
 - [ ] Sprint 4 — ONNX/TensorRT latency, demo video, model release
