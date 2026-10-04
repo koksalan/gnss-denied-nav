@@ -75,7 +75,8 @@ class AutopilotState:
 
     def _loop(self):
         while True:
-            msg = self.m.recv_match(type=["SIMSTATE", "ATTITUDE", "GLOBAL_POSITION_INT"], blocking=True, timeout=1)
+            msg = self.m.recv_match(type=["SIMSTATE", "ATTITUDE", "GLOBAL_POSITION_INT", "MISSION_CURRENT"],
+                                    blocking=True, timeout=1)
             if msg is not None:
                 self.last[msg.get_type()] = msg
 
@@ -88,7 +89,8 @@ class AutopilotState:
                     true_yaw_deg=math.degrees(s.yaw), yaw_deg=math.degrees(a.yaw),
                     roll_deg=math.degrees(a.roll), pitch_deg=math.degrees(a.pitch),
                     rel_alt_m=g.relative_alt / 1000, ekf_lat=g.lat / 1e7, ekf_lon=g.lon / 1e7,
-                    ekf_vn=g.vx / 100, ekf_ve=g.vy / 100)
+                    ekf_vn=g.vx / 100, ekf_ve=g.vy / 100,
+                    mission_seq=self.last["MISSION_CURRENT"].seq if "MISSION_CURRENT" in self.last else -1)
 
 
 def main():

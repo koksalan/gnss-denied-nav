@@ -90,6 +90,8 @@ def main():
     ap.add_argument("--weights", default="outputs/finetune/s1/best.pt")
     ap.add_argument("--patch-m", type=float, default=250.0)
     ap.add_argument("--jam-after", type=float, default=60.0)
+    ap.add_argument("--jam-at-seq", type=int, default=None,
+                    help="jam when the mission reaches this item (e.g. the first route waypoint) instead of a time")
     ap.add_argument("--duration", type=float, default=420.0)
     ap.add_argument("--min-alt", type=float, default=200.0)
     ap.add_argument("--no-send", action="store_true", help="control run: jam GNSS but send no visual fixes")
@@ -135,7 +137,9 @@ def main():
     gps_epoch_base = time.time() - clock.now()          # GPS time = wall time at start + simulation seconds
     while time.time() - t0 < args.duration:
         t = time.time() - t0
-        if not jammed and t > args.jam_after:
+        snap = ap_state.snapshot()
+        jam_now = (snap is not None and snap["mission_seq"] >= args.jam_at_seq) if args.jam_at_seq is not None             else t > args.jam_after
+        if not jammed and jam_now:
             set_param(m, "SIM_GPS1_ENABLE", 0)
             jammed = True
             print(f"t={t:5.0f}s  >>> GNSS JAMMED (GPS1 off)", flush=True)

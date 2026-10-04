@@ -158,6 +158,37 @@ and single-window tracking (one fp16 LightGlue call around the prior, no retriev
    projected with the EKF's own velocity, GPS week time driven by **simulation time** (used for jitter correction).
 5. Result: no divergence in 18.5 min; attitude error ≤ 7.7° (it reached 40–50° in the failed variants).
 
+### Localizability-aware route planning (A* vs. RL)
+
+Visual localization is not equally good everywhere: rivers, uniform fields and parts of the drone-photo ground
+fail. Planning a route that keeps the aircraft localizable was tested in three steps.
+
+1. **Localizability map** (`scripts/localizability_map.py`): the Gazebo ground *is* the orthomosaic, so the camera
+   view at any point can be synthesized from it (verified against real Gazebo frames) and fed to the real localizer
+   — 1 296 cells of 100 m over the whole area in minutes. Checked against the 18.5-min closed-loop flight: where the
+   map predicts < 25 % success the aircraft actually got good fixes 43 % of the time, where it predicts > 75 %, 89 %
+   (AUC 0.67). A *satellite-only* proxy (keypoint density, texture) correlates weakly (r ≈ 0.3): what fails is the
+   camera-vs-map appearance gap, which the map alone does not show → in practice this map comes from past flights.
+2. **Planners** on a belief model (fix failures tied to places; uncertainty grows ~quadratically without fixes,
+   calibrated on the dead-reckoning run): A* with cost = length × (1 + λ·(1 − success)) vs. a **PPO policy**
+   (stable-baselines3, 7×7 local map + its current uncertainty as observation, 1.5 M steps, 2 min on CPU).
+   On 100 random missions (≥ 2 km): straight max-uncertainty 32.6 m; A* 13.3 m at +3 % length, 10.0 m at +8 %;
+   PPO 21.4 → 17.3 m at +0–2.5 % depending on its uncertainty weight. **A* dominates** on a static, fully known
+   map (it is optimal there, and the policy only sees 700 m around it); RL's niche would be maps that are unknown
+   or change in flight — not demonstrated here.
+3. **Closed loop in SITL** (GNSS jammed at route start, sensor errors, one flight each):
+
+![routes](docs/routes_west.png)
+
+| 1.8 km mission over a hard area | flight time | EKF error median | **max** | longest fix gap |
+|---|---|---|---|---|
+| straight | 131 s | 19.2 m | 86.4 m | 35 s |
+| RL (PPO) | 129 s | 12.2 m | 68.1 m | 60 s |
+| **A\* (λ = 3)** | 170 s (+30 %) | **9.6 m** | **37.5 m** | **9 s** |
+
+The straight and RL routes show the dead-reckoning ramps (no fixes over the hard area); the A* detour keeps fixes
+coming. Single flights per route: a demonstration, not a statistic.
+
 ### Learned confidence model: not better than the rules (negative result)
 `scripts/build_conf_dataset.py` recorded 800 frames over the real-imagery world (exact SIMSTATE labels, GNSS-denied
 attitude/baro noise injected) → 981 fixes with 15 features (match counts, inlier ratio, distinct-place runner-up,
@@ -239,5 +270,6 @@ python sim/plot_runs.py gnss_jamming_realistic.png visloc03_real err_control err
 - [x] Sprint 3a — real-image pose validation, realistic sim (drone-photo ground, airspeed, sensor errors), consistency gate, robust EKF integration
 - [x] Sprint 3b.1 — learned fix-confidence model vs. rule gate (negative result: rules kept)
 - [x] Sprint 3b.2 — speed: pre-flight map features + single-window tracking (7× faster, EKF median 10.6 → 6.3 m)
-- [ ] Sprint 3b — localizability-aware route planning (A* vs RL), target detection + GNSS-free target geolocation, oblique matching in turns, visual landing
+- [x] Sprint 3b.3 — localizability map, A* vs RL (PPO) route planning, closed-loop route flights
+- [ ] Next — target detection + GNSS-free target geolocation (synthetic data), oblique matching in turns, visual landing
 - [ ] Sprint 4 — ONNX/TensorRT latency, demo video, model release

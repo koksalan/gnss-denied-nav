@@ -10,7 +10,11 @@ cd "$REPO"
 rm -f /tmp/gdnav_sim/sitl.pid
 bash sim/run_sim.sh "$WORLD" ${GUI:+--gui} > /tmp/gdnav_sim_run.log 2>&1 &
 until [ -f /tmp/gdnav_sim/sitl.pid ]; do sleep 1; done; sleep 10
-"$SIM_HOME/venv/bin/python" -u sim/fly_mission.py --world "sim/gz/worlds/$WORLD.json" --conn tcp:127.0.0.1:5760 > "/tmp/gdnav_sim/fly_$TAG.log" 2>&1
+if [ -n "${MISSION:-}" ]; then          # planned route (sim/fly_route.py); otherwise the square patrol
+  "$SIM_HOME/venv/bin/python" -u sim/fly_route.py --mission "$MISSION" --conn tcp:127.0.0.1:5760 > "/tmp/gdnav_sim/fly_$TAG.log" 2>&1
+else
+  "$SIM_HOME/venv/bin/python" -u sim/fly_mission.py --world "sim/gz/worlds/$WORLD.json" --conn tcp:127.0.0.1:5760 > "/tmp/gdnav_sim/fly_$TAG.log" 2>&1
+fi
 grep -E "handover|could not|failed" "/tmp/gdnav_sim/fly_$TAG.log"
 "$SIM_HOME/ai/bin/python" -u sim/visual_gps.py --world "sim/gz/worlds/$WORLD.json" --tag "$TAG" --jam-after 90 --duration 480 $EXTRA
 bash sim/stop_sim.sh
