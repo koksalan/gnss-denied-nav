@@ -1,0 +1,108 @@
+{
+ "ambulance": [
+  {
+   "pose": "0 0 0 0 0 0",
+   "scale": "0.0254 0.0254 0.0254",
+   "uri": "https://fuel.gazebosim.org/1.0/openrobotics/models/ambulance/4/files/meshes/ambulance.obj",
+   "submesh": ""
+  }
+ ],
+ "bus": [
+  {
+   "pose": "0 0 0 0 0 0",
+   "scale": "0.01 0.01 0.01",
+   "uri": "https://fuel.gazebosim.org/1.0/openrobotics/models/bus/3/files/meshes/bus.obj",
+   "submesh": ""
+  }
+ ],
+ "hatchback": [
+  {
+   "pose": "0 0 0 0 0 1.57079632679",
+   "scale": "0.0254 0.0254 0.0254",
+   "uri": "https://fuel.gazebosim.org/1.0/openrobotics/models/hatchback/3/files/meshes/hatchback.obj",
+   "submesh": ""
+  }
+ ],
+ "hatchback blue": [
+  {
+   "pose": "0 0 0 0 0 1.57079632679",
+   "scale": "0.0254 0.0254 0.0254",
+   "uri": "https://fuel.gazebosim.org/1.0/openrobotics/models/hatchback%20blue/5/files/meshes/hatchback.obj",
+   "submesh": ""
+  }
+ ],
+ "hatchback red": [
+  {
+   "pose": "0 0 0 0 0 1.57079632679",
+   "scale": "0.0254 0.0254 0.0254",
+   "uri": "https://fuel.gazebosim.org/1.0/openrobotics/models/hatchback%20red/4/files/meshes/hatchback.obj",
+   "submesh": ""
+  }
+ ],
+ "pickup": [
+  {
+   "pose": "0 0 0 0 0 -1.57079632679",
+   "scale": "1 1 1",
+   "uri": "https://fuel.gazebosim.org/1.0/openrobotics/models/pickup/4/files/meshes/pickup.dae",
+   "submesh": ""
+  }
+ ],
+ "prius hybrid": [
+  {
+   "pose": "0 0 0 0 0 0",
+   "scale": "0.01 0.01 0.01",
+   "uri": "https://fuel.gazebosim.org/1.0/openrobotics/models/prius%20hybrid/3/files/meshes/Hybrid.obj",
+   "submesh": "<submesh>\n                            <name>Hybrid</name>\n                            <center>false</center>\n                        </submesh>"
+  },
+  {
+   "pose": "0 0 0 0 0 0",
+   "scale": "0.01 0.01 0.01",
+   "uri": "https://fuel.gazebosim.org/1.0/openrobotics/models/prius%20hybrid/3/files/meshes/Hybrid.obj",
+   "submesh": "<submesh>\n                            <name>Hybrid_Interior</name>\n                            <center>false</center>\n                        </submesh>"
+  },
+  {
+   "pose": "0 0 0 0 0 0",
+   "scale": "0.01 0.01 0.01",
+   "uri": "https://fuel.gazebosim.org/1.0/openrobotics/models/prius%20hybrid/3/files/meshes/Hybrid.obj",
+   "submesh": "<submesh>\n                            <name>Hybrid_Windows</name>\n                            <center>false</center>\n                        </submesh>"
+  },
+  {
+   "pose": "0 0 0 1.302101 0 0",
+   "scale": "0.01 0.01 0.01",
+   "uri": "https://fuel.gazebosim.org/1.0/openrobotics/models/prius%20hybrid/3/files/meshes/Hybrid.obj",
+   "submesh": "<submesh>\n                            <name>Steering_Wheel</name>\n                            <center>true</center>\n                        </submesh>"
+  },
+  {
+   "pose": "0.04 0.0 0.0 0 0 0",
+   "scale": "0.01 0.01 0.01",
+   "uri": "https://fuel.gazebosim.org/1.0/openrobotics/models/prius%20hybrid/3/files/meshes/Hybrid.obj",
+   "submesh": "<submesh>\n                            <name>Wheel_Front_Left_</name>\n                            <center>true</center>\n                        </submesh>"
+  },
+  {
+   "pose": "-0.04 0.0 0.0 0 0 0",
+   "scale": "0.01 0.01 0.01",
+   "uri": "https://fuel.gazebosim.org/1.0/openrobotics/models/prius%20hybrid/3/files/meshes/Hybrid.obj",
+   "submesh": "<submesh>\n                            <name>Wheel_Front_Right</name>\n                            <center>true</center>\n                        </submesh>"
+  },
+  {
+   "pose": "0.04 0.0 0.0 0 0 0",
+   "scale": "0.01 0.01 0.01",
+   "uri": "https://fuel.gazebosim.org/1.0/openrobotics/models/prius%20hybrid/3/files/meshes/Hybrid.obj",
+   "submesh": "<submesh>\n                            <name>Wheel_Front_Left_</name>\n                            <center>true</center>\n                        </submesh>"
+  },
+  {
+   "pose": "-0.04 0.0 0.0 0 0 0",
+   "scale": "0.01 0.01 0.01",
+   "uri": "https://fuel.gazebosim.org/1.0/openrobotics/models/prius%20hybrid/3/files/meshes/Hybrid.obj",
+   "submesh": "<submesh>\n                            <name>Wheel_Front_Right</name>\n                            <center>true</center>\n                        </submesh>"
+  }
+ ],
+ "suv": [
+  {
+   "pose": "0 0 0 0 0 -1.57079632679",
+   "scale": "0.06 0.06 0.06",
+   "uri": "https://fuel.gazebosim.org/1.0/openrobotics/models/suv/4/files/meshes/suv.obj",
+   "submesh": ""
+  }
+ ]
+}

@@ -159,7 +159,8 @@ class Localizer:
                 e, n, up = pose.center_enu
                 lat = match.crop_ll[0] + n / self._mpd[0]
                 lon = match.crop_ll[1] + e / self._mpd[1]
-                extra = dict(height_m=float(up), off_nadir_deg=pose.off_nadir_deg, reproj_px=pose.reproj_px, **feats)
+                extra = dict(height_m=float(up), off_nadir_deg=pose.off_nadir_deg, reproj_px=pose.reproj_px,
+                             R_cw=pose.R_cw.tolist(), **feats)        # camera orientation, for target geolocation
                 return Fix(float(lat), float(lon), min(match.inliers, pose.inliers), match.rank, extra), mode
             # PnP failed (degenerate matches): fall through to the IMU-attitude correction
 

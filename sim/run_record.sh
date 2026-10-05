@@ -15,7 +15,7 @@ until [ -f /tmp/gdnav_sim/sitl.pid ]; do sleep 1; done; sleep 10
   > "/tmp/gdnav_sim/fly_$NAME.log" 2>&1
 grep -E "handover|could not|failed" "/tmp/gdnav_sim/fly_$NAME.log"
 rm -rf "/tmp/gdnav_sim/$NAME"
-"$SIM_HOME/ai/bin/python" -u sim/record.py --out "/tmp/gdnav_sim/$NAME" --n "$N" --every "$EVERY" --min-alt 300 \
+"$SIM_HOME/ai/bin/python" -u sim/record.py --out "/tmp/gdnav_sim/$NAME" --n "$N" --every "$EVERY" --min-alt 300 ${BOXES:+--boxes} \
   | awk 'NR % 100 == 1'
 mkdir -p outputs/sim_rec && rm -rf "outputs/sim_rec/$NAME" && cp -r "/tmp/gdnav_sim/$NAME" "outputs/sim_rec/$NAME"
 echo "recorded $(ls "outputs/sim_rec/$NAME" | wc -l) files"

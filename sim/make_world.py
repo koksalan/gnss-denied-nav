@@ -65,6 +65,19 @@ def zephyr_cam_sdf(zephyr_sdf: str) -> str:
           <clip><near>1</near><far>5000</far></clip>
         </camera>
       </sensor>
+      <sensor name="nadir_boxes" type="boundingbox_camera">
+        <!-- same pose/intrinsics as nadir_cam: 2D boxes of every entity with a Label plugin (auto-labelling) -->
+        <pose>0 0 0 0 1.5707963 0</pose>
+        <always_on>1</always_on>
+        <update_rate>{CAMERA['rate_hz']}</update_rate>
+        <topic>nadir_boxes</topic>
+        <camera>
+          <box_type>2d</box_type>
+          <horizontal_fov>{fov:.6f}</horizontal_fov>
+          <image><width>{w}</width><height>{h}</height></image>
+          <clip><near>1</near><far>5000</far></clip>
+        </camera>
+      </sensor>
     </link>
     <joint name="nadir_cam_joint" type="fixed">
       <parent>zephyr::wing</parent>

@@ -4,9 +4,10 @@ Localize a UAV **without GPS** by matching its downward camera against a satelli
 position to the autopilot (ArduPilot) so the mission continues when GNSS is jammed.
 
 > Status: **Sprint 1 done** (visual localization on real UAV imagery) · **Sprint 2 done** (closed loop in
-> ArduPilot SITL + Gazebo) · **Sprint 3 in progress**: realistic simulation — the simulated camera sees real drone
+> ArduPilot SITL + Gazebo) · **Sprint 3 done**: realistic simulation — the simulated camera sees real drone
 > photos, with sensor errors: over 18.5 min of GNSS jamming the error stays **≤ 94 m** with visual GPS vs **840 m
-> and growing** without it.
+> and growing** without it. Detected vehicles are geolocated without GNSS to **1.7 m** median (220 m without
+> visual navigation), shown live in a web ground station.
 
 ![match example](docs/match_example.jpg)
 *Unseen test flight 11. Top: 291 consistent matches → confident fix. Bottom: season change between photo and
@@ -233,6 +234,62 @@ system: while GNSS is still healthy), evaluated on the remaining 70 %.*
   should be **fused over time** with the IMU (vision bounds the slow drift, the IMU keeps it smooth) rather than
   used frame by frame. The closed-loop PnP result of Sprint 2 relied on perfectly known simulated intrinsics.
 
+## Results — Sprint 3c: target detection and GNSS-free target geolocation
+
+A UAV is useful when it can say **where** something is. With GNSS jammed, a target's coordinates are only as good
+as the camera pose they are computed from. Here the same camera frame is used twice: once to localize the UAV,
+once to find vehicles and put them on the map.
+
+### Detector: synthetic data, sim-to-real
+
+1 220 vehicles (Gazebo Fuel cars, vans, trucks, buses; random and in parking-lot clusters) are placed on the
+drone-photo world; Gazebo's bounding-box camera labels every frame automatically. Real data: VisDrone remapped to
+two classes (`car`, `large_vehicle`). YOLO11s, same recipe for every model; the sim test set is the **east half of
+the world, never seen in training** (`scripts/prep_det_data.py`, `scripts/train_det.py`, `scripts/eval_det_matrix.py`).
+
+| trained on ↓ / tested on → | real (VisDrone val) mAP50 | sim (held-out area) mAP50 |
+|---|---|---|
+| real only | **0.717** | 0.110 |
+| sim only | 0.001 | **0.939** |
+| real + sim | 0.704 | 0.909 |
+
+Each domain alone does not transfer at all (a sim-only model finds nothing in real photos). Mixing costs
+≈1 point on real data and gives a single detector that works in both — that model flies in the loop below.
+
+### Where is the target? Pose from the same frame
+
+For each detection the pixel ray is intersected with the ground (`gdnav/geolocate.py`) using either the
+autopilot's (EKF) attitude/position or the **visual PnP pose of that very frame**. A detection is "true" when its
+true-pose projection lands within 10 m of a vehicle. 15-min flights, GNSS jammed at t = 90 s, sensor errors on
+(`sim/analyze_geoloc.py geo_visual geo_control`):
+
+| run (GNSS jammed) | camera pose | median error | p90 | within 20 m |
+|---|---|---|---|---|
+| no visual GPS | autopilot (EKF, drifting) | 220 m | 391 m | 29 % |
+| visual GPS in the loop | autopilot (EKF, visually aided) | 8.3 m | 21.3 m | 89 % |
+| visual GPS in the loop | **visual PnP, same frame** | **1.7 m** | **7.2 m** | **99.9 %** |
+| *reference: GNSS healthy* | *autopilot (EKF)* | *5.0 m* | *6.6 m* | *100 %* |
+
+124 k detections, 3.2 % false positives, 309 distinct vehicles found in one flight.
+
+- Without visual navigation, targets are reported **hundreds of meters** off — useless for any follow-up.
+- PnP pose from the detection frame is **better than the GNSS-healthy autopilot pose** (1.7 vs 5.0 m): it has
+  zero time offset to the image, while the autopilot state is a few hundred ms old at 20 m/s and its attitude is
+  only as good as the EKF's.
+
+### Ground-control-station panel
+
+`gcs/` is a small web ground station (FastAPI + Leaflet + Chart.js) that replays or follows live any run written
+by `sim/visual_gps.py`: camera with detections, map with true / autopilot / visual tracks and geolocated
+targets, GNSS state, error over time.
+
+![GCS, visual GPS](docs/gcs_geo_visual.png)
+*Visual GPS in the loop, 449 s after jamming: autopilot within 15 m, targets (yellow) on the true vehicles (blue).*
+
+![GCS, control](docs/gcs_geo_control.png)
+*Same scenario without visual GPS: the autopilot believes it is 230 m east (red dashed track); targets computed
+with its pose (red) land on empty ground.*
+
 ## Reproduce
 
 ```bash
@@ -262,6 +319,15 @@ WORLD=visloc03_real EXTRA_PARAMS=$PWD/sim/params/errors.parm bash sim/run_experi
 WORLD=visloc03_real EXTRA_PARAMS=$PWD/sim/params/errors.parm bash sim/run_experiment.sh err_control --no-send --duration 1200
 python sim/analyze_coverage.py err_gated
 python sim/plot_runs.py gnss_jamming_realistic.png visloc03_real err_control err_gated
+
+# Sprint 3c: targets, detector, geolocation, ground station
+python sim/make_targets.py --world visloc03_real --n-random 500 --clusters 60 --per-cluster 12   # then make_world.py --name visloc03_real_targets
+BOXES=1 bash sim/run_record.sh ...                     # auto-labelled sim frames
+python scripts/prep_det_data.py && python scripts/train_det.py --data ../data/det/mixed.yaml --name det_mixed   # also real, sim
+python scripts/eval_det_matrix.py
+WORLD=visloc03_real_targets EXTRA_PARAMS=$PWD/sim/params/errors.parm bash sim/run_experiment.sh geo_visual --pose pnp     --duration 900 --detector outputs/det/det_mixed/weights/best.pt --frame-every 3
+python sim/analyze_geoloc.py geo_visual geo_control
+python gcs/server.py                                   # -> http://127.0.0.1:8050 (replay or LIVE)
 ```
 
 ## Roadmap
@@ -271,5 +337,6 @@ python sim/plot_runs.py gnss_jamming_realistic.png visloc03_real err_control err
 - [x] Sprint 3b.1 — learned fix-confidence model vs. rule gate (negative result: rules kept)
 - [x] Sprint 3b.2 — speed: pre-flight map features + single-window tracking (7× faster, EKF median 10.6 → 6.3 m)
 - [x] Sprint 3b.3 — localizability map, A* vs RL (PPO) route planning, closed-loop route flights
-- [ ] Next — target detection + GNSS-free target geolocation (synthetic data), oblique matching in turns, visual landing
+- [x] Sprint 3c — synthetic-data vehicle detector (sim-to-real matrix), GNSS-free target geolocation, ground-station panel
+- [ ] Next — oblique matching in turns, visual landing
 - [ ] Sprint 4 — ONNX/TensorRT latency, demo video, model release

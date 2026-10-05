@@ -18,6 +18,7 @@ import sys
 import time
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +26,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "sim"))
 from gdnav.confidence import ConfidenceModel, fix_features  # noqa: E402
 from gdnav.geo import haversine_m, meters_per_degree  # noqa: E402
+from gdnav.geolocate import camera_pose_from_attitude, pixel_to_ground  # noqa: E402
+from gdnav.pose import intrinsics  # noqa: E402
 from gdnav.localizer import Localizer, LocalizerConfig  # noqa: E402
 from gdnav.query import Camera  # noqa: E402
 from gdnav.visloc import VisLocFlight  # noqa: E402
@@ -102,6 +105,9 @@ def main():
                     help="pnp: position+attitude from the image matches; boresight: correct with IMU attitude")
     ap.add_argument("--attitude", choices=["ekf", "true"], default="ekf",
                     help="attitude used for boresight correction: autopilot estimate, or simulator truth (ablation)")
+    ap.add_argument("--detector", default=None, help="YOLO weights: detect + geolocate ground vehicles")
+    ap.add_argument("--frame-every", type=int, default=0,
+                    help="ground-station telemetry: save every N-th camera frame (0 = telemetry without frames)")
     ap.add_argument("--tag", default="visual")
     args = ap.parse_args()
 
@@ -113,10 +119,20 @@ def main():
     out = ROOT / "outputs" / "sim_runs" / args.tag
     out.mkdir(parents=True, exist_ok=True)
 
-    loc = None if args.no_send else Localizer(
+    # control runs (--no-send) still localize when a detector is used (to compare target geolocation), but never send
+    loc = None if (args.no_send and not args.detector) else Localizer(
         VisLocFlight(w["flight"]).sat, LocalizerConfig(patch_m=args.patch_m, pose=args.pose, rerank_k=25), str(ROOT / args.weights), bounds_ll=bounds)
     frames, ap_state, clock = LatestFrame(), AutopilotState(args.conn), SimClock(Path(args.world).stem)
     model = ConfidenceModel(ROOT / args.gate_model) if args.gate_model else None
+    det, det_log, targets_en = None, None, None
+    if args.detector:
+        from ultralytics import YOLO
+        det = YOLO(str(ROOT / args.detector))
+        targets_en = np.array([[t["east_m"], t["north_m"]] for t in w.get("targets", [])])
+        det_log = csv.writer(open(out / "detections.csv", "w", newline=""))
+        det_log.writerow(["t", "jammed", "cls", "conf", "u", "v", "true_vehicle_id", "dist_truepose_to_vehicle_m",
+                          "err_ekf_pose_m", "err_pnp_pose_m", "pnp_confident"])
+        K_cam = intrinsics(w["camera"]["focal_px"], w["camera"]["width"], w["camera"]["height"])
     m = ap_state.m
     set_param(m, "SIM_GPS1_ENABLE", 1)
     if not args.no_send:
@@ -124,9 +140,15 @@ def main():
         time.sleep(1.0)
         # fixes are latency-compensated below (projected to send time), so the EKF should treat them as current
         set_param(m, "GPS2_DELAY_MS", 0)
-    print("node ready", "(control run, no visual fixes)" if args.no_send else f"({len(loc.tiles_ll)} tiles)", flush=True)
+    print("node ready", "(control run: no visual fixes sent)" if args.no_send else "", f"({len(loc.tiles_ll)} tiles)" if loc else "",
+          flush=True)
 
     log = open(out / "log.csv", "w", newline="")
+    # ground-station telemetry (gcs/): one JSON line per loop, flushed immediately so a live panel can tail it
+    tel = open(out / "telemetry.jsonl", "w", buffering=1)
+    if args.frame_every:
+        (out / "frames").mkdir(exist_ok=True)
+    n_loop = 0
     wr = csv.writer(log)
     wr.writerow(["t", "jammed", "true_lat", "true_lon", "ekf_lat", "ekf_lon", "ekf_err_m",
                  "roll", "pitch", "yaw", "true_roll", "true_pitch", "true_yaw",
@@ -154,6 +176,9 @@ def main():
                                            "true_roll_deg", "true_pitch_deg", "true_yaw_deg"))]
         if loc is None or st["rel_alt_m"] < args.min_alt:
             wr.writerow(row + ["", "", "", "", "", 0, "", ""])
+            tel.write(json.dumps(dict(t=round(t, 2), jammed=int(jammed), mode="climb", alt=round(st["rel_alt_m"], 1),
+                                      yaw=round(st["yaw_deg"], 1), true=[st["true_lat"], st["true_lon"]],
+                                      ekf=[st["ekf_lat"], st["ekf_lon"]], ekf_err=round(ekf_err, 1), dets=[])) + "\n")
             time.sleep(0.25)
             continue
         pre = "true_" if args.attitude == "true" else ""
@@ -199,16 +224,62 @@ def main():
                 if latency < 3.0:
                     lat_s += st["ekf_vn"] * latency / m_lat
                     lon_s += st["ekf_ve"] * latency / m_lon
-                send_gps_input(m, gps_epoch_base + clock.now(), lat_s, lon_s, None, acc_m=acc, speed_acc=99.0)
-                sent = 1
+                if not args.no_send:
+                    send_gps_input(m, gps_epoch_base + clock.now(), lat_s, lon_s, None, acc_m=acc, speed_acc=99.0)
+                    sent = 1
+        dets_tel = []
+        if det is not None and mode != "tilted":
+            res = det.predict(frame, imgsz=1280, conf=0.3, verbose=False)[0]
+            if len(res.boxes):
+                uv = res.boxes.xywh[:, :2].cpu().numpy()
+                cls, cf = res.boxes.cls.cpu().numpy().astype(int), res.boxes.conf.cpu().numpy()
+                en_ll = lambda lat, lon: np.array([(lon - w["lon0"]) * m_lon, (lat - w["lat0"]) * m_lat])  # noqa: E731
+                true_c = np.r_[en_ll(st["true_lat"], st["true_lon"]), st["rel_alt_m"]]
+                p_true = pixel_to_ground(uv, K_cam, camera_pose_from_attitude(
+                    st["true_roll_deg"], st["true_pitch_deg"], st["true_yaw_deg"]), true_c)
+                p_ekf = pixel_to_ground(uv, K_cam, camera_pose_from_attitude(
+                    st["roll_deg"], st["pitch_deg"], st["yaw_deg"]), np.r_[en_ll(st["ekf_lat"], st["ekf_lon"]), st["rel_alt_m"]])
+                p_pnp = None
+                if "R_cw" in fix.extra:
+                    p_pnp = pixel_to_ground(uv, K_cam, np.array(fix.extra["R_cw"]),
+                                            np.r_[en_ll(fix.lat, fix.lon), fix.extra["height_m"]])
+                d_all = np.linalg.norm(p_true[:, None, :] - targets_en[None], axis=2)
+                vid = d_all.argmin(1)
+                wh = res.boxes.xywh[:, 2:].cpu().numpy()
+                to_ll = lambda p: [w["lat0"] + p[1] / m_lat, w["lon0"] + p[0] / m_lon]  # noqa: E731
+                for k in range(len(uv)):
+                    dets_tel.append(dict(u=float(uv[k, 0]), v=float(uv[k, 1]), w=float(wh[k, 0]), h=float(wh[k, 1]),
+                                         cls=int(cls[k]), conf=round(float(cf[k]), 2), true_vid=int(vid[k]),
+                                         ekf=to_ll(p_ekf[k]), pnp=to_ll(p_pnp[k]) if p_pnp is not None else None))
+                for k in range(len(uv)):
+                    tv = targets_en[vid[k]]
+                    det_log.writerow([round(t, 2), int(jammed), cls[k], round(float(cf[k]), 3), round(float(uv[k, 0])),
+                                      round(float(uv[k, 1])), int(vid[k]), round(float(d_all[k, vid[k]]), 1),
+                                      round(float(np.linalg.norm(p_ekf[k] - tv)), 1),
+                                      round(float(np.linalg.norm(p_pnp[k] - tv)), 1) if p_pnp is not None else "",
+                                      int(fix.inliers >= loc.cfg.min_inliers)])
         fix_err = float(haversine_m(st["true_lat"], st["true_lon"], fix.lat, fix.lon)) if fix.inliers else ""
         wr.writerow(row + [fix.lat, fix.lon, round(fix_err, 1) if fix_err != "" else "", fix.inliers, mode, sent,
                            fix.extra.get("height_m", ""), fix.extra.get("off_nadir_deg", ""),
                            round(clock.now() - sim_stamp, 3), gate, p_bad, acc_pred])
+        n_loop += 1
+        frame_name = None
+        if args.frame_every and n_loop % args.frame_every == 0:
+            frame_name = f"{n_loop:06d}.jpg"
+            small = cv2.resize(frame, (640, int(640 * frame.shape[0] / frame.shape[1])), interpolation=cv2.INTER_AREA)
+            cv2.imwrite(str(out / "frames" / frame_name), cv2.cvtColor(small, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 80])
+        tel.write(json.dumps(dict(
+            t=round(t, 2), sim_t=round(sim_stamp, 2), jammed=int(jammed), mode=mode, gate=gate, sent=sent,
+            inliers=int(fix.inliers), latency=round(clock.now() - sim_stamp, 3), alt=round(st["rel_alt_m"], 1),
+            yaw=round(st["yaw_deg"], 1), roll=round(st["roll_deg"], 1), pitch=round(st["pitch_deg"], 1),
+            true=[st["true_lat"], st["true_lon"]], ekf=[st["ekf_lat"], st["ekf_lon"]],
+            fix=[fix.lat, fix.lon] if fix.inliers else None, ekf_err=round(ekf_err, 1),
+            fix_err=round(fix_err, 1) if fix_err != "" else None, frame=frame_name, dets=dets_tel)) + "\n")
         if int(t) % 15 == 0:
             print(f"t={t:5.0f}s jammed={int(jammed)} ekf_err={ekf_err:6.1f} m  fix_err={fix_err} mode={mode}", flush=True)
             log.flush()
     log.close()
+    tel.close()
     set_param(m, "SIM_GPS1_ENABLE", 1)
     print("done ->", out / "log.csv", flush=True)
 

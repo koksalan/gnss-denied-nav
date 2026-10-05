@@ -16,6 +16,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from gz.msgs10.annotated_axis_aligned_2d_box_v_pb2 import AnnotatedAxisAligned2DBox_V
 from gz.msgs10.clock_pb2 import Clock
 from gz.msgs10.image_pb2 import Image
 from gz.transport13 import Node
@@ -45,6 +46,32 @@ class LatestFrame:
         """(frame, wall_time, sim_time)"""
         with self.lock:
             return self.frame, self.stamp, self.sim_stamp
+
+
+class LatestBoxes:
+    """2D boxes from the bounding-box camera, kept per simulation timestamp (to pair them with camera frames)."""
+
+    def __init__(self, topic: str = "/nadir_boxes", keep: int = 50):
+        self.lock, self.by_stamp, self.keep = threading.Lock(), {}, keep
+        self.node = Node()
+        if not self.node.subscribe(AnnotatedAxisAligned2DBox_V, topic, self._cb):
+            raise RuntimeError(f"cannot subscribe {topic}")
+
+    def _cb(self, msg):
+        stamp = round(msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9, 3)
+        boxes = [(b.label, b.box.min_corner.x, b.box.min_corner.y, b.box.max_corner.x, b.box.max_corner.y)
+                 for b in msg.annotated_box]
+        with self.lock:
+            self.by_stamp[stamp] = boxes
+            for k in sorted(self.by_stamp)[:-self.keep]:
+                del self.by_stamp[k]
+
+    def at(self, sim_stamp: float, tol: float = 0.02):
+        with self.lock:
+            if not self.by_stamp:
+                return None
+            k = min(self.by_stamp, key=lambda x: abs(x - sim_stamp))
+            return self.by_stamp[k] if abs(k - sim_stamp) <= tol else None
 
 
 class SimClock:
@@ -100,21 +127,37 @@ def main():
     ap.add_argument("--n", type=int, default=80)
     ap.add_argument("--every", type=float, default=1.0)
     ap.add_argument("--min-alt", type=float, default=350.0)
+    ap.add_argument("--boxes", action="store_true", help="also save YOLO labels from the bounding-box camera")
     args = ap.parse_args()
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     cam, ap_state = LatestFrame(), AutopilotState(args.conn)
+    boxes = LatestBoxes() if args.boxes else None
+    if boxes:
+        (out / "labels").mkdir(exist_ok=True)
     rows = []
     while len(rows) < args.n:
         time.sleep(args.every)
-        frame, stamp, _ = cam.get()
+        frame, stamp, sim_stamp = cam.get()
         st = ap_state.snapshot()
         if frame is None or st is None or st["rel_alt_m"] < args.min_alt or time.time() - stamp > 0.5:
             continue
+        bx = boxes.at(sim_stamp) if boxes else None
+        if boxes and bx is None:
+            continue                                   # no label set for exactly this frame
         name = f"f{len(rows):04d}.jpg"
+        if boxes:
+            h, w = frame.shape[:2]
+            lines = []
+            for label, x0, y0, x1, y1 in bx:            # label 1 = car, 2 = large vehicle -> YOLO class label-1
+                x0, x1, y0, y1 = max(x0, 0), min(x1, w), max(y0, 0), min(y1, h)
+                if x1 - x0 < 2 or y1 - y0 < 2:
+                    continue
+                lines.append(f"{label - 1} {(x0 + x1) / 2 / w:.6f} {(y0 + y1) / 2 / h:.6f} {(x1 - x0) / w:.6f} {(y1 - y0) / h:.6f}")
+            (out / "labels" / name.replace(".jpg", ".txt")).write_text("\n".join(lines))
         cv2.imwrite(str(out / name), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
-        rows.append(dict(file=name, t=stamp, **st))
+        rows.append(dict(file=name, t=stamp, sim_t=sim_stamp, n_boxes=len(bx) if bx else 0, **st))
         print(f"{name} alt={st['rel_alt_m']:.0f} yaw={st['yaw_deg']:.0f} roll={st['roll_deg']:.0f}", flush=True)
     (out / "meta.json").write_text(json.dumps(rows, indent=1))
 
