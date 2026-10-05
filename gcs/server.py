@@ -78,6 +78,19 @@ def telemetry(tag: str, start: int = 0):
     return JSONResponse(dict(start=start, next=start + len(out), rows=out))
 
 
+@app.get("/api/run/{tag}/series")
+def series(tag: str):
+    """Light time series (no detections) - used for the without-visual-navigation baseline."""
+    t, jam, err = [], [], []
+    for ln in (run_dir(tag) / "telemetry.jsonl").read_text().splitlines():
+        try:
+            r = json.loads(ln)
+        except json.JSONDecodeError:
+            break
+        t.append(r["t"]); jam.append(r["jammed"]); err.append(r["ekf_err"])
+    return dict(t=t, jammed=jam, ekf_err=err)
+
+
 @app.get("/api/run/{tag}/frame/{name}")
 def frame(tag: str, name: str):
     f = (run_dir(tag) / "frames" / name).resolve()

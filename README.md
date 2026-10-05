@@ -279,16 +279,21 @@ true-pose projection lands within 10 m of a vehicle. 15-min flights, GNSS jammed
 
 ### Ground-control-station panel
 
-`gcs/` is a small web ground station (FastAPI + Leaflet + Chart.js) that replays or follows live any run written
-by `sim/visual_gps.py`: camera with detections, map with true / autopilot / visual tracks and geolocated
-targets, GNSS state, error over time.
+`gcs/` is a web ground station (FastAPI + Leaflet, no build step) that replays, or follows live, any run written
+by `sim/visual_gps.py`: onboard camera with detections, the camera footprint and located targets on the map, and
+the position error compared second by second with the same flight **without** visual navigation. The error chart
+is the timeline (click to seek).
 
 ![GCS, visual GPS](docs/gcs_geo_visual.png)
-*Visual GPS in the loop, 449 s after jamming: autopilot within 15 m, targets (yellow) on the true vehicles (blue).*
+*7.5 min after jamming: the autopilot is within 18 m with visual navigation, 211 m without it (12× more accurate);
+144 vehicles located, 2.7 m median error.*
 
 ![GCS, control](docs/gcs_geo_control.png)
-*Same scenario without visual GPS: the autopilot believes it is 230 m east (red dashed track); targets computed
-with its pose (red) land on empty ground.*
+*Same scenario without visual navigation: the autopilot believes it is 211 m away (red track and ring); targets
+computed with its pose (red) land on empty ground.*
+
+![GCS, jamming](docs/gcs_jam_alert.png)
+*The moment GNSS is lost.*
 
 ## Reproduce
 

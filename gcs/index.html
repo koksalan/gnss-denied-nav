@@ -3,268 +3,466 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GNSS-Denied Nav — Ground Station</title>
+<title>VisNav Ground Station</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
   :root {
-    --bg: #0b0f14; --panel: #121821; --panel2: #18202b; --line: #243042; --text: #d8e1ec; --muted: #7f8ea3;
-    --ok: #2ecc71; --bad: #ff4d4f; --warn: #f5a623; --accent: #4da3ff; --pnp: #ffd84d; --ekf: #ff6b6b; --truth: #ffffff;
+    --bg: #07090c; --glass: rgba(12, 16, 22, .78); --edge: rgba(255, 255, 255, .08); --text: #e8edf3; --muted: #8592a3; --dim: #4b5563;
+    --ours: #22d3ee; --bad: #f43f5e; --ok: #34d399; --amber: #fbbf24;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 "Segoe UI", system-ui, sans-serif; }
-  header { display: flex; align-items: center; gap: 14px; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-  header h1 { font-size: 15px; margin: 0 8px 0 0; letter-spacing: .5px; }
-  select, button, input[type=range] { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font: inherit; }
-  button { cursor: pointer; }
-  button.on { border-color: var(--accent); color: var(--accent); }
-  .chip { padding: 3px 10px; border-radius: 12px; font-weight: 600; font-size: 12px; border: 1px solid var(--line); }
-  .chip.ok { color: var(--ok); border-color: var(--ok); } .chip.bad { color: var(--bad); border-color: var(--bad); animation: blink 1.2s infinite; }
-  .chip.warn { color: var(--warn); border-color: var(--warn); } .chip.info { color: var(--accent); border-color: var(--accent); }
-  @keyframes blink { 50% { opacity: .45; } }
-  .stats { display: flex; gap: 16px; margin-left: auto; flex-wrap: wrap; }
-  .stat { text-align: right; } .stat b { display: block; font-size: 16px; font-variant-numeric: tabular-nums; } .stat span { color: var(--muted); font-size: 11px; }
-  main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); grid-template-rows: minmax(0, 1fr) 210px; gap: 10px; padding: 10px; height: calc(100vh - 92px); }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; position: relative; overflow: hidden; display: flex; flex-direction: column; }
-  .panel h2 { margin: 0; padding: 6px 10px; font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .6px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; }
-  #camwrap { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; min-height: 0; }
-  #cam { max-width: 100%; max-height: 100%; }
-  #map { flex: 1; background: #05080c; }
-  #chartbox { grid-column: 1 / 3; }
-  #chartwrap { flex: 1; padding: 4px 10px; min-height: 0; }
-  footer { display: flex; align-items: center; gap: 10px; padding: 6px 14px; background: var(--panel); border-top: 1px solid var(--line); height: 40px; }
-  footer input[type=range] { flex: 1; }
-  .legend { display: flex; gap: 12px; font-size: 11px; color: var(--muted); }
-  .legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 4px; }
-  .camtag { position: absolute; left: 10px; top: 36px; background: rgba(0,0,0,.6); padding: 4px 8px; border-radius: 4px; font-size: 12px; }
-  .empty { color: var(--muted); padding: 30px; text-align: center; }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr; grid-template-rows: 300px 360px 200px; height: auto; } #chartbox { grid-column: 1; } }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 Inter, "Segoe UI", system-ui, sans-serif; overflow: hidden; -webkit-font-smoothing: antialiased; }
+  #map { position: fixed; inset: 0; background: var(--bg); }
+  .leaflet-image-layer { filter: saturate(.75) brightness(.78) contrast(1.06); }
+  .vignette { position: fixed; inset: 0; pointer-events: none; z-index: 400;
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.55) 100%); }
+  .card { position: fixed; z-index: 500; background: var(--glass); backdrop-filter: blur(14px) saturate(1.2);
+    -webkit-backdrop-filter: blur(14px) saturate(1.2); border: 1px solid var(--edge); border-radius: 14px; box-shadow: 0 10px 40px rgba(0,0,0,.45); }
+  .label { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* top bar */
+  #top { left: 16px; right: 16px; top: 16px; height: 56px; display: flex; align-items: center; padding: 0 18px; gap: 18px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .04em; }
+  .brand small { display: block; font-weight: 500; color: var(--muted); font-size: 11px; letter-spacing: .02em; }
+  .status { margin: 0 auto; display: flex; gap: 10px; align-items: center; }
+  .pill { display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 999px; font-weight: 600; font-size: 12px;
+    letter-spacing: .08em; border: 1px solid var(--edge); background: rgba(255,255,255,.03); transition: all .3s; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; }
+  .pill.ok { color: var(--ok); } .pill.bad { color: var(--bad); border-color: rgba(244,63,94,.35); background: rgba(244,63,94,.08); }
+  .pill.bad .dot { animation: pulse 1s infinite; } .pill.ours { color: var(--ours); border-color: rgba(34,211,238,.3); background: rgba(34,211,238,.07); }
+  .pill.dimmed { color: var(--muted); }
+  @keyframes pulse { 50% { opacity: .25; } }
+  select { background: transparent; color: var(--muted); border: 1px solid var(--edge); border-radius: 8px; padding: 6px 10px; font: inherit; outline: none; }
+  select option { background: #111; }
+  .btn { background: transparent; border: 1px solid var(--edge); color: var(--muted); border-radius: 8px; padding: 6px 12px; cursor: pointer; font: 600 11px Inter; letter-spacing: .1em; }
+  .btn:hover { color: var(--text); } .btn.on { color: var(--bad); border-color: rgba(244,63,94,.4); }
+
+  /* camera */
+  #camcard { left: 16px; top: 88px; width: 440px; padding: 12px; }
+  #camcard .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .rec { color: var(--bad); font: 600 10.5px var(--mono); display: flex; align-items: center; gap: 6px; }
+  #camwrap { position: relative; border-radius: 8px; overflow: hidden; background: #000; aspect-ratio: 1280 / 854; }
+  #cam { width: 100%; height: 100%; display: block; }
+  #camwrap::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(transparent 70%, rgba(0,0,0,.55)); }
+  .camfoot { position: absolute; left: 10px; right: 10px; bottom: 8px; z-index: 2; display: flex; justify-content: space-between; font: 11px var(--mono); color: #cbd5e1; }
+  .fwd { position: absolute; right: 10px; top: 8px; z-index: 2; font: 600 10px var(--mono); color: rgba(255,255,255,.6); letter-spacing: .1em; }
+  .miniStats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
+  .miniStats div b { display: block; font: 600 15px var(--mono); }
+
+  /* metrics */
+  #metrics { right: 16px; top: 88px; width: 330px; padding: 20px; }
+  .hero { font: 600 52px/1 var(--mono); letter-spacing: -.02em; margin: 8px 0 4px; transition: color .4s; }
+  .hero small { font-size: 22px; color: var(--muted); margin-left: 4px; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .compare { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--edge); }
+  .bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,.06); margin: 6px 0 12px; overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 3px; transition: width .3s; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; }
+  .row b { font: 600 18px var(--mono); }
+  .factor { margin-top: 6px; font-weight: 700; font-size: 15px; color: var(--ours); }
+  .targets { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--edge); display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .targets b { display: block; font: 600 24px var(--mono); color: var(--amber); }
+
+  /* timeline */
+  #timeline { left: 16px; right: 16px; bottom: 16px; height: 112px; padding: 12px 18px; display: flex; gap: 16px; align-items: stretch; }
+  #play { width: 46px; height: 46px; align-self: center; border-radius: 50%; border: 1px solid var(--edge); background: rgba(255,255,255,.05);
+    color: var(--text); font-size: 16px; cursor: pointer; flex: none; }
+  #play:hover { background: rgba(34,211,238,.15); border-color: var(--ours); }
+  .tlside { display: flex; flex-direction: column; justify-content: center; gap: 6px; flex: none; width: 120px; }
+  .clock { font: 600 22px var(--mono); }
+  #chart { flex: 1; min-width: 0; cursor: ew-resize; }
+  .legend { display: flex; flex-direction: column; justify-content: center; gap: 6px; flex: none; font-size: 11.5px; color: var(--muted); }
+  .legend i { display: inline-block; width: 16px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 8px; }
+
+  /* aircraft + targets on the map */
+  .ac { width: 34px; height: 34px; filter: drop-shadow(0 0 6px rgba(34,211,238,.9)); }
+  .tgt { width: 9px; height: 9px; transform: rotate(45deg); border: 1.5px solid var(--amber); background: rgba(251,191,36,.25); animation: pop .6s ease-out; }
+  .tgt.bad { border-color: var(--bad); background: rgba(244,63,94,.25); }
+  @keyframes pop { from { transform: rotate(45deg) scale(3.5); opacity: 0; } to { transform: rotate(45deg) scale(1); opacity: 1; } }
+  #recenter { position: fixed; right: 362px; top: 88px; z-index: 500; display: none; }
+
+  /* jam alert */
+  #alert { position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center; pointer-events: none; opacity: 0; transition: opacity .4s; }
+  #alert.show { opacity: 1; }
+  #alert::before { content: ""; position: absolute; inset: 0; box-shadow: inset 0 0 160px rgba(244,63,94,.55); animation: flash 1s 2; }
+  @keyframes flash { 50% { box-shadow: inset 0 0 40px rgba(244,63,94,.2); } }
+  .alertbox { text-align: center; padding: 26px 44px; border-radius: 16px; background: rgba(8,10,14,.85); border: 1px solid rgba(244,63,94,.4); backdrop-filter: blur(12px); }
+  .alertbox .l1 { color: var(--bad); font: 700 28px Inter; letter-spacing: .16em; }
+  .alertbox .l2 { color: var(--ours); font: 600 15px Inter; letter-spacing: .2em; margin-top: 10px; opacity: 0; transition: opacity .5s .9s; }
+  #alert.show .l2 { opacity: 1; }
+  .leaflet-control-zoom { display: none; }
+
+  @media (max-width: 1100px) {
+    body { overflow: auto; }
+    #map { position: relative; height: 60vh; }
+    .card, #recenter { position: relative; left: auto; right: auto; top: auto; bottom: auto; width: auto; margin: 12px 16px; }
+    #top { height: auto; flex-wrap: wrap; padding: 12px; } .status { margin: 0; flex-wrap: wrap; }
+    #timeline { height: 120px; }
+    .vignette { display: none; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>GNSS-DENIED NAV · GROUND STATION</h1>
-  <select id="run"></select>
-  <button id="live" title="follow a running flight">● LIVE</button>
-  <button id="follow" class="on" title="keep the map centred on the aircraft">⌖ FOLLOW</button>
-  <span id="gnss" class="chip">GNSS —</span>
-  <span id="mode" class="chip">MODE —</span>
-  <div class="stats">
-    <div class="stat"><b id="s_ekf">—</b><span>autopilot pos. error</span></div>
-    <div class="stat"><b id="s_fix">—</b><span>visual fix error</span></div>
-    <div class="stat"><b id="s_rate">—</b><span>visual fixes / s</span></div>
-    <div class="stat"><b id="s_lat">—</b><span>latency</span></div>
-    <div class="stat"><b id="s_alt">—</b><span>alt / heading</span></div>
-    <div class="stat"><b id="s_det">—</b><span>targets in view</span></div>
+<div id="map"></div>
+<div class="vignette"></div>
+
+<div id="top" class="card">
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="#22d3ee" stroke-width="1.6"><circle cx="13" cy="13" r="9"/><circle cx="13" cy="13" r="2.5" fill="#22d3ee"/><path d="M13 1v6M13 19v6M1 13h6M19 13h6"/></svg>
+    <div>VISNAV<small>GNSS-denied navigation · ground station</small></div>
   </div>
-</header>
-<main>
-  <section class="panel">
-    <h2>Onboard nadir camera <span id="camtime"></span></h2>
-    <div id="camwrap"><canvas id="cam" width="640" height="427"></canvas></div>
-    <div class="camtag" id="camtag"></div>
-  </section>
-  <section class="panel">
-    <h2>Operation area (satellite map) <span class="legend">
-      <span><i style="background:var(--truth)"></i>true</span>
-      <span><i style="background:var(--ekf)"></i>autopilot</span>
-      <span><i style="background:var(--ok)"></i>visual fixes</span>
-      <span><i style="background:var(--pnp)"></i>target (visual pose)</span>
-      <span><i style="background:#29c3ff"></i>true vehicles</span></span></h2>
-    <div id="map"></div>
-  </section>
-  <section class="panel" id="chartbox">
-    <h2>Position error over time <span id="jaminfo"></span></h2>
-    <div id="chartwrap"><canvas id="chart"></canvas></div>
-  </section>
-</main>
-<footer>
+  <select id="run" title="flight"></select>
+  <div class="status">
+    <div id="gnss" class="pill dimmed"><span class="dot"></span><span>GNSS</span></div>
+    <div id="nav" class="pill dimmed"><span class="dot"></span><span>NAV</span></div>
+  </div>
+  <button id="live" class="btn" title="follow a running flight">● LIVE</button>
+</div>
+
+<div id="camcard" class="card">
+  <div class="head"><span class="label">Onboard camera · nadir</span><span class="rec"><span class="dot"></span>EO</span></div>
+  <div id="camwrap"><canvas id="cam" width="640" height="427"></canvas>
+    <div class="fwd">FWD ▶</div>
+    <div class="camfoot"><span id="camL">—</span><span id="camR"></span></div></div>
+  <div class="miniStats">
+    <div><span class="label">Alt</span><b id="m_alt">—</b></div>
+    <div><span class="label">Hdg</span><b id="m_hdg">—</b></div>
+    <div><span class="label">Fix/s</span><b id="m_rate">—</b></div>
+    <div><span class="label">Latency</span><b id="m_lat">—</b></div>
+  </div>
+</div>
+
+<div id="metrics" class="card">
+  <div class="label">Position error</div>
+  <div class="hero" id="hero">—</div>
+  <div class="sub" id="heroSub">autopilot estimate vs. truth</div>
+  <div class="compare" id="compare" style="display:none">
+    <div class="row"><span class="sub">With visual navigation</span><b id="c_ours" style="color:var(--ours)">—</b></div>
+    <div class="bar"><i id="b_ours" style="background:var(--ours)"></i></div>
+    <div class="row"><span class="sub">Without (inertial only)</span><b id="c_base" style="color:var(--bad)">—</b></div>
+    <div class="bar"><i id="b_base" style="background:var(--bad)"></i></div>
+    <div class="factor" id="factor"></div>
+  </div>
+  <div class="targets">
+    <div><span class="label">Targets located</span><b id="t_n">0</b></div>
+    <div><span class="label">Median error</span><b id="t_err">—</b></div>
+  </div>
+</div>
+
+<button id="recenter" class="btn">⌖ RECENTER</button>
+
+<div id="timeline" class="card">
   <button id="play">▶</button>
-  <select id="speed"><option>1</option><option selected>4</option><option>16</option><option>64</option></select><span style="color:var(--muted)">×</span>
-  <input type="range" id="slider" min="0" max="0" value="0">
-  <span id="clock" style="font-variant-numeric: tabular-nums; min-width: 130px; text-align:right">—</span>
-</footer>
+  <div class="tlside">
+    <span class="label" id="clockLabel">Mission time</span>
+    <span class="clock" id="clock">00:00</span>
+    <select id="speed"><option value="1">1×</option><option value="4">4×</option><option value="8" selected>8×</option><option value="16">16×</option><option value="32">32×</option></select>
+  </div>
+  <canvas id="chart"></canvas>
+  <div class="legend">
+    <span id="lg_ours"><i style="background:var(--ours)"></i>with visual nav</span>
+    <span id="lg_base"><i style="background:var(--bad)"></i>without visual nav</span>
+    <span class="label" style="font-size:9.5px">position error · log</span>
+  </div>
+</div>
+
+<div id="alert"><div class="alertbox"><div class="l1">GNSS SIGNAL LOST</div><div class="l2">VISUAL NAVIGATION ENGAGED</div></div></div>
+
 <script>
 const $ = id => document.getElementById(id);
-let RUN = null, INFO = null, rows = [], next = 0, idx = 0, playing = false, live = false, follow = true, lastTick = 0, simT = 0;
-let map, layers = {}, chart, camImg = new Image(), camName = null, jamT = null;
+let RUN, INFO, rows = [], next = 0, idx = 0, playing = false, live = false, follow = true, lastTs = 0, playT = 0;
+let map, L_, jamT = null, hasVisual = false, base = null, baseJamT = null, camImg = new Image(), camName = null;
+let tgt = new Map(), tgtUpto = -1, alertShown = false;
+const M_LAT = 111320, mLon = lat => 111320 * Math.cos(lat * Math.PI / 180);
 
-const fmtM = v => v == null ? "—" : (v >= 1000 ? (v / 1000).toFixed(2) + " km" : v.toFixed(1) + " m");
-
-async function api(path) { const r = await fetch(path); if (!r.ok) throw new Error(path); return r.json(); }
+const fmtM = v => v == null ? "—" : v >= 1000 ? (v / 1000).toFixed(2) + " km" : v >= 100 ? v.toFixed(0) + " m" : v.toFixed(1) + " m";
+const mmss = s => { s = Math.max(0, Math.round(s)); return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); };
+const api = async p => { const r = await fetch(p); if (!r.ok) throw new Error(p); return r.json(); };
+const dist = (a, b) => Math.hypot((a[0] - b[0]) * M_LAT, (a[1] - b[1]) * mLon(a[0]));
 
 async function loadRuns() {
   const runs = await api("/api/runs");
   $("run").innerHTML = runs.map(r => `<option>${r.tag}</option>`).join("");
-  if (runs.length) await openRun(runs[0].tag);
-  else document.querySelector("main").innerHTML = '<div class="empty">No runs with telemetry yet. Start one with sim/run_experiment.sh … --frame-every 3</div>';
+  const want = new URLSearchParams(location.search).get("run");
+  const pick = runs.find(r => r.tag === want) || runs.find(r => !/control/.test(r.tag)) || runs[0];
+  if (pick) { $("run").value = pick.tag; await openRun(pick.tag, runs); }
 }
 
-async function openRun(tag) {
-  RUN = tag; rows = []; next = 0; idx = 0; jamT = null; camName = null;
+async function openRun(tag, runs) {
+  RUN = tag; rows = []; next = 0; idx = 0; jamT = null; hasVisual = false; camName = null; alertShown = false;
   INFO = await api(`/api/run/${tag}/info`);
-  initMap(); initChart();
+  initMap();
   await pull();
-  idx = live ? rows.length - 1 : 0;
-  render(true);
+  // baseline: the same scenario flown without visual navigation (e.g. geo_visual -> geo_control)
+  base = null; baseJamT = null;
+  runs = runs || await api("/api/runs");
+  const prefix = tag.split("_")[0];
+  const b = hasVisual && (runs.find(r => r.tag === prefix + "_control") || runs.find(r => /control/.test(r.tag) && r.tag !== tag));
+  if (b) {
+    base = await api(`/api/run/${b.tag}/series`);
+    const j = base.jammed.indexOf(1); baseJamT = j >= 0 ? base.t[j] : null;
+  }
+  $("lg_ours").style.display = hasVisual ? "" : "none";
+  $("lg_base").style.display = base || !hasVisual ? "" : "none";
+  idx = live ? rows.length - 1 : 0; playT = rows[idx]?.t ?? 0;
+  resetTargets();
+  playing = !live; $("play").textContent = playing ? "❚❚" : "▶";
+  render();
 }
 
 async function pull() {
   const d = await api(`/api/run/${RUN}/telemetry?start=${next}`);
-  if (!d.rows.length) return false;
   for (const r of d.rows) {
     rows.push(r);
     if (jamT === null && r.jammed) jamT = r.t;
+    if (r.sent) hasVisual = true;
   }
   next = d.next;
-  $("slider").max = rows.length - 1;
-  rebuildChart();
-  return true;
+  return d.rows.length > 0;
 }
 
+// ---------- map ----------
 function initMap() {
   if (map) map.remove();
-  map = L.map("map", { zoomSnap: 0.25, preferCanvas: true, attributionControl: false });
+  map = L.map("map", { zoomSnap: 0.25, preferCanvas: true, attributionControl: false, zoomControl: false });
   L.imageOverlay(INFO.map_url, INFO.bounds).addTo(map);
-  map.fitBounds(INFO.bounds);
-  const R = L.canvas();
-  layers.vehicles = L.layerGroup(INFO.targets.map(t => L.circleMarker([t[0], t[1]],
-      { renderer: R, radius: 2, color: "#29c3ff", weight: 0, fillOpacity: .45 }))).addTo(map);
-  layers.truth = L.polyline([], { color: "#fff", weight: 2 }).addTo(map);
-  layers.ekf = L.polyline([], { color: "#ff6b6b", weight: 2, dashArray: "5 4" }).addTo(map);
-  layers.fixes = L.layerGroup().addTo(map);
-  layers.targets = L.layerGroup().addTo(map);
-  layers.err = L.polyline([], { color: "#ff6b6b", weight: 1 }).addTo(map);
-  layers.acTrue = L.circleMarker([0, 0], { radius: 6, color: "#fff", fillColor: "#fff", fillOpacity: 1 }).addTo(map);
-  layers.acEkf = L.circleMarker([0, 0], { radius: 6, color: "#ff6b6b", fillColor: "#ff6b6b", fillOpacity: .4 }).addTo(map);
+  map.setView([INFO.lat0, INFO.lon0], 16.25);
+  map.on("dragstart", () => { follow = false; $("recenter").style.display = "block"; });
+  const R = L.canvas({ padding: .5 });
+  L_ = {
+    foot: L.polygon([], { renderer: R, color: "#22d3ee", weight: 1, opacity: .7, fillColor: "#22d3ee", fillOpacity: .08, dashArray: "3 4" }).addTo(map),
+    truth: L.polyline([], { renderer: R, color: "#ffffff", weight: 1.5, opacity: .55 }).addTo(map),
+    glow: L.polyline([], { renderer: R, color: "#22d3ee", weight: 9, opacity: .16 }).addTo(map),
+    est: L.polyline([], { renderer: R, color: "#22d3ee", weight: 2.5, opacity: .95 }).addTo(map),
+    err: L.polyline([], { renderer: R, color: "#f43f5e", weight: 1.5, dashArray: "4 4" }).addTo(map),
+    targets: L.layerGroup().addTo(map),
+    ac: L.marker([INFO.lat0, INFO.lon0], { icon: L.divIcon({ className: "", iconSize: [34, 34], iconAnchor: [17, 17],
+      html: `<svg class="ac" id="acsvg" viewBox="0 0 34 34"><path d="M17 3 L20 14 L31 19 L31 21.5 L20 19 L19.2 27 L23 29.5 L23 31 L17 29.5 L11 31 L11 29.5 L14.8 27 L14 19 L3 21.5 L3 19 L14 14 Z" fill="#e8edf3" stroke="#22d3ee" stroke-width="1"/></svg>` }),
+      zIndexOffset: 1000 }).addTo(map),
+    ghost: L.circleMarker([0, 0], { renderer: R, radius: 7, color: "#f43f5e", weight: 2, fillOpacity: .15 }),
+  };
 }
 
-function initChart() {
-  if (chart) chart.destroy();
-  chart = new Chart($("chart"), {
-    type: "line",
-    data: { datasets: [
-      { label: "autopilot position error (m)", data: [], borderColor: "#ff6b6b", borderWidth: 1.4, pointRadius: 0 },
-      { label: "visual fix error (m)", data: [], borderColor: "#2ecc71", borderWidth: 1, pointRadius: 0, showLine: false, pointStyle: "circle" },
-    ]},
-    options: {
-      animation: false, maintainAspectRatio: false, parsing: false, normalized: true,
-      scales: { x: { type: "linear", title: { display: true, text: "time (s)" }, ticks: { color: "#7f8ea3" }, grid: { color: "#1c2533" } },
-                y: { type: "logarithmic", min: 0.5, title: { display: true, text: "m (log)" }, ticks: { color: "#7f8ea3" }, grid: { color: "#1c2533" } } },
-      plugins: { legend: { labels: { color: "#d8e1ec" } } },
-    },
-    plugins: [{ id: "markers", afterDatasetsDraw(c) {
-      const { ctx, chartArea: a, scales: { x } } = c;
-      const vline = (t, color, label) => { if (t == null) return; const px = x.getPixelForValue(t);
-        ctx.save(); ctx.strokeStyle = color; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.stroke();
-        if (label) { ctx.fillStyle = color; ctx.fillText(label, px + 4, a.top + 12); } ctx.restore(); };
-      vline(jamT, "#ff4d4f", "GNSS jammed");
-      if (rows[idx]) vline(rows[idx].t, "#4da3ff", "");
-    }}],
+function footprint(r) {
+  // camera: image +u = forward, +v = right wing (see sim/zephyr camera mount); flat ground, nadir approximation
+  const cam = INFO.camera, f = cam.focal_px, a = Math.max(r.alt || 0, 1);
+  const hw = cam.width / 2 * a / f, hh = cam.height / 2 * a / f, y = (r.yaw || 0) * Math.PI / 180;
+  const pos = r.true;   // drawn around the aircraft symbol
+  return [[hw, -hh], [hw, hh], [-hw, hh], [-hw, -hh]].map(([fw, rt]) => {
+    const n = fw * Math.cos(y) - rt * Math.sin(y), e = fw * Math.sin(y) + rt * Math.cos(y);
+    return [pos[0] + n / M_LAT, pos[1] + e / mLon(pos[0])];
   });
 }
 
-function rebuildChart() {
-  if (!chart) return;
-  const step = Math.max(1, Math.floor(rows.length / 3000));
-  const e = [], f = [];
-  for (let i = 0; i < rows.length; i += step) {
+function resetTargets() { tgt.clear(); tgtUpto = -1; L_.targets.clearLayers(); }
+
+function updateTargets() {
+  if (idx < tgtUpto) resetTargets();
+  const src = hasVisual ? "pnp" : "ekf";
+  for (let i = tgtUpto + 1; i <= idx; i++) {
     const r = rows[i];
-    if (r.ekf_err != null) e.push({ x: r.t, y: Math.max(r.ekf_err, 0.5) });
-    if (r.fix_err != null && r.sent) f.push({ x: r.t, y: Math.max(r.fix_err, 0.5) });
-  }
-  chart.data.datasets[0].data = e; chart.data.datasets[1].data = f;
-  $("jaminfo").textContent = jamT == null ? "" : `GNSS jammed at t = ${jamT.toFixed(0)} s`;
-}
-
-function render(full) {
-  const r = rows[idx]; if (!r) return;
-  $("slider").value = idx;
-  const tj = jamT == null ? null : r.t - jamT;
-  $("clock").textContent = `t = ${r.t.toFixed(1)} s` + (tj != null && tj >= 0 ? `  (+${tj.toFixed(0)} s jammed)` : "");
-  $("gnss").className = "chip " + (r.jammed ? "bad" : "ok"); $("gnss").textContent = r.jammed ? "GNSS JAMMED" : "GNSS OK";
-  const m = r.mode || "—";
-  $("mode").className = "chip " + ({ track: "info", global: "warn", tilted: "warn", climb: "" }[m] ?? "");
-  $("mode").textContent = { track: "VISUAL TRACKING", global: "RELOCALIZING", tilted: "BANKED · NO FIX", climb: "CLIMB" }[m] || m.toUpperCase();
-  $("s_ekf").textContent = fmtM(r.ekf_err);
-  $("s_ekf").style.color = r.ekf_err > 50 ? "var(--bad)" : r.ekf_err > 20 ? "var(--warn)" : "var(--ok)";
-  $("s_fix").textContent = r.sent ? fmtM(r.fix_err) : "—";
-  $("s_lat").textContent = r.latency != null ? (r.latency * 1000).toFixed(0) + " ms" : "—";
-  $("s_alt").textContent = `${(r.alt ?? 0).toFixed(0)} m · ${(((r.yaw ?? 0) + 360) % 360).toFixed(0)}°`;
-  $("s_det").textContent = (r.dets || []).length;
-  // fixes per second over the last 10 s
-  let n = 0, j = idx; while (j >= 0 && rows[j].t > r.t - 10) { n += rows[j].sent ? 1 : 0; j--; }
-  $("s_rate").textContent = (n / 10).toFixed(1);
-
-  // map: tracks up to now (decimated), aircraft, error line
-  const step = Math.max(1, Math.floor(idx / 1500));
-  const tr = [], ek = [];
-  for (let i = 0; i <= idx; i += step) { tr.push(rows[i].true); ek.push(rows[i].ekf); }
-  tr.push(r.true); ek.push(r.ekf);
-  layers.truth.setLatLngs(tr); layers.ekf.setLatLngs(ek);
-  layers.acTrue.setLatLng(r.true); layers.acEkf.setLatLng(r.ekf); layers.err.setLatLngs([r.true, r.ekf]);
-  layers.fixes.clearLayers();
-  for (let i = Math.max(0, idx - 400); i <= idx; i++) {
-    const q = rows[i]; if (q.sent && q.fix) L.circleMarker(q.fix, { radius: 2, color: "#2ecc71", weight: 0, fillOpacity: .9 }).addTo(layers.fixes);
-  }
-  layers.targets.clearLayers();
-  for (let i = Math.max(0, idx - 60); i <= idx; i++) {
-    for (const d of rows[i].dets || []) {
-      if (d.pnp) L.circleMarker(d.pnp, { radius: 3, color: "#ffd84d", weight: 1.5, fill: false, opacity: i === idx ? 1 : .35 }).addTo(layers.targets);
-      if (i === idx && d.ekf) L.circleMarker(d.ekf, { radius: 3, color: "#ff6b6b", weight: 1.5, fill: false }).addTo(layers.targets);
+    if (!r.jammed) continue;                         // only targets located without GNSS
+    for (const d of r.dets || []) {
+      const p = d[src]; if (!p || d.true_vid < 0) continue;
+      const truth = INFO.targets[d.true_vid]; if (!truth) continue;
+      const e = dist(p, truth);
+      if (e > 2000) continue;
+      let t = tgt.get(d.true_vid);
+      if (!t) { t = { n: 0, m: null }; tgt.set(d.true_vid, t); }
+      t.n++; t.e = e;                               // shown once seen 3 times (a single false alarm is not a target)
+      if (t.m) t.m.setLatLng(p);
+      else if (t.n >= 3) t.m = L.marker(p, { icon: L.divIcon({ className: "", iconSize: [9, 9], html: `<div class="tgt ${hasVisual ? "" : "bad"}"></div>` }), interactive: false }).addTo(L_.targets);
     }
   }
-  if (follow) map.setView(r.true, Math.max(map.getZoom(), 16), { animate: false });
+  tgtUpto = idx;
+  const shown = [...tgt.values()].filter(t => t.m);
+  $("t_n").textContent = shown.length;
+  const es = shown.map(t => t.e).sort((a, b) => a - b);
+  $("t_err").textContent = es.length ? fmtM(es[Math.floor(es.length / 2)]) : "—";
+  $("t_err").style.color = es.length && es[Math.floor(es.length / 2)] > 50 ? "var(--bad)" : "var(--amber)";
+}
 
-  // camera: latest saved frame at or before idx, boxes from the same row
+// ---------- baseline lookup (same time since jamming) ----------
+function baseErrAt(t) {
+  if (!base || jamT == null || baseJamT == null) return null;
+  const tb = baseJamT + (t - jamT);
+  let lo = 0, hi = base.t.length - 1;
+  if (tb > base.t[hi]) return null;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (base.t[m] < tb) lo = m + 1; else hi = m; }
+  return base.ekf_err[lo];
+}
+
+// ---------- render ----------
+function render() {
+  const r = rows[idx]; if (!r) return;
+  const jammed = !!r.jammed, tj = jamT == null ? null : r.t - jamT;
+
+  // status pills
+  $("gnss").className = "pill " + (jammed ? "bad" : "ok");
+  $("gnss").lastChild.textContent = jammed ? `GNSS JAMMED · ${mmss(tj)}` : "GNSS NOMINAL";
+  let navCls = "dimmed", nav = "NAV · GNSS";
+  if (jammed && hasVisual) { navCls = "ours"; nav = { track: "NAV · VISUAL", global: "NAV · VISUAL · RELOCALIZING", tilted: "NAV · INERTIAL (BANKED)" }[r.mode] || "NAV · VISUAL"; }
+  else if (jammed) { navCls = "bad"; nav = "NAV · INERTIAL ONLY"; }
+  $("nav").className = "pill " + navCls; $("nav").lastChild.textContent = nav;
+
+  // hero metric
+  const e = r.ekf_err;
+  $("hero").innerHTML = e == null ? "—" : (e >= 1000 ? (e / 1000).toFixed(2) + "<small>km</small>" : e.toFixed(e >= 100 ? 0 : 1) + "<small>m</small>");
+  $("hero").style.color = e > 50 ? "var(--bad)" : jammed && hasVisual ? "var(--ours)" : "var(--text)";
+  $("heroSub").textContent = jammed ? (hasVisual ? "autopilot fed by visual navigation" : "autopilot drifting on inertial sensors") : "autopilot with GNSS";
+
+  // comparison with the same flight without visual navigation
+  const be = jammed ? baseErrAt(r.t) : null;
+  const showCmp = be != null && be > (e ?? 0);    // the gap opens once the inertial-only run starts drifting
+  $("compare").style.display = showCmp ? "block" : "none";
+  if (showCmp) {
+    const mx = Math.max(be, e, 1), sc = v => Math.max(2, 100 * Math.log10(1 + v) / Math.log10(1 + mx));
+    $("c_ours").textContent = fmtM(e); $("c_base").textContent = fmtM(be);
+    $("b_ours").style.width = sc(e) + "%"; $("b_base").style.width = sc(be) + "%";
+    const k = be / Math.max(e, 1);
+    $("factor").textContent = k >= 1.5 ? `${k >= 10 ? k.toFixed(0) : k.toFixed(1)}× more accurate` : "";
+  }
+
+  // jam alert (once per playback through the jamming moment)
+  if (jammed && !alertShown && tj != null && tj < 8 && playing) {
+    alertShown = true; $("alert").querySelector(".l2").textContent = hasVisual ? "VISUAL NAVIGATION ENGAGED" : "INERTIAL ONLY · NO VISUAL NAVIGATION";
+    $("alert").classList.add("show"); setTimeout(() => $("alert").classList.remove("show"), 3200);
+  }
+  if (!jammed) alertShown = false;
+
+  // camera mini stats
+  $("m_alt").textContent = (r.alt ?? 0).toFixed(0) + "m";
+  $("m_hdg").textContent = String(Math.round(((r.yaw ?? 0) + 360) % 360)).padStart(3, "0") + "°";
+  let n = 0, j = idx; while (j >= 0 && rows[j].t > r.t - 10) { n += rows[j].sent ? 1 : 0; j--; }
+  $("m_rate").textContent = hasVisual ? (n / 10).toFixed(0) : "—";
+  $("m_lat").textContent = hasVisual && r.latency != null ? (r.latency * 1000).toFixed(0) + "ms" : "—";
+
+  // map
+  const step = Math.max(1, Math.floor(idx / 1500)), tr = [], es = [];
+  for (let i = 0; i <= idx; i += step) { tr.push(rows[i].true); es.push(rows[i].ekf); }
+  tr.push(r.true); es.push(r.ekf);
+  L_.truth.setLatLngs(tr); L_.est.setLatLngs(es); L_.glow.setLatLngs(es);
+  const estColor = hasVisual || !jammed ? "#22d3ee" : "#f43f5e";
+  L_.est.setStyle({ color: estColor }); L_.glow.setStyle({ color: estColor });
+  L_.foot.setLatLngs(footprint(r));
+  L_.ac.setLatLng(r.true);
+  const svg = document.getElementById("acsvg"); if (svg) svg.style.transform = `rotate(${r.yaw || 0}deg)`;
+  const off = e > 15;
+  L_.err.setLatLngs(off ? [r.true, r.ekf] : []);
+  if (off) { L_.ghost.setLatLng(r.ekf); if (!map.hasLayer(L_.ghost)) L_.ghost.addTo(map); } else if (map.hasLayer(L_.ghost)) L_.ghost.remove();
+  updateTargets();
+  if (follow) map.panTo(r.true, { animate: false });
+
+  // camera frame
   let k = idx; while (k >= 0 && !rows[k].frame) k--;
   if (k >= 0 && rows[k].frame !== camName) {
-    camName = rows[k].frame;
-    const row = rows[k];
-    camImg.onload = () => drawCam(row);
-    camImg.src = `/api/run/${RUN}/frame/${camName}`;
-  } else if (k < 0) {
-    const c = $("cam").getContext("2d"); c.fillStyle = "#000"; c.fillRect(0, 0, 640, 427);
+    camName = rows[k].frame; const row = rows[k];
+    camImg.onload = () => drawCam(row); camImg.src = `/api/run/${RUN}/frame/${camName}`;
   }
-  chart.update("none");
+  $("clock").textContent = mmss(r.t);
+  $("clock").style.color = jammed ? "var(--bad)" : "var(--text)";
+  drawChart();
 }
 
 function drawCam(row) {
   const cv = $("cam"), c = cv.getContext("2d");
   c.drawImage(camImg, 0, 0, cv.width, cv.height);
-  const s = cv.width / (INFO.camera.width || 1280);
+  const s = cv.width / INFO.camera.width;
+  c.lineWidth = 1.6;
   for (const d of row.dets || []) {
-    c.strokeStyle = d.cls === 1 ? "#ff9f43" : "#ffd84d"; c.lineWidth = 2;
-    c.strokeRect((d.u - d.w / 2) * s - 3, (d.v - d.h / 2) * s - 3, d.w * s + 6, d.h * s + 6);
+    const x = (d.u - d.w / 2) * s - 4, y = (d.v - d.h / 2) * s - 4, w = d.w * s + 8, h = d.h * s + 8, q = Math.min(5, w / 3);
+    c.strokeStyle = "#fbbf24"; c.beginPath();
+    for (const [px, py, dx, dy] of [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]]) {
+      c.moveTo(px + dx * q, py); c.lineTo(px, py); c.lineTo(px, py + dy * q);
+    }
+    c.stroke();
   }
-  $("camtime").textContent = `t = ${row.t.toFixed(1)} s`;
-  $("camtag").innerHTML = `${(row.dets || []).length} vehicles detected · ${row.inliers ?? 0} map matches` +
-    (row.gate ? ` · gate: ${row.gate}` : "");
+  const nd = (row.dets || []).length;
+  $("camL").textContent = `${nd} vehicle${nd === 1 ? "" : "s"}`;
+  $("camR").textContent = hasVisual && row.inliers ? `${row.inliers} map matches` : "";
 }
+
+// ---------- timeline chart (also the scrubber) ----------
+function drawChart() {
+  const cv = $("chart"), dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (cv.width !== W * dpr) { cv.width = W * dpr; cv.height = H * dpr; }
+  const c = cv.getContext("2d"); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
+  if (!rows.length) return;
+  const t0 = rows[0].t, t1 = rows[rows.length - 1].t, pad = 6;
+  const X = t => pad + (t - t0) / Math.max(t1 - t0, 1) * (W - 2 * pad);
+  const yMax = Math.log10(2000), Y = v => H - 14 - (Math.log10(Math.max(v, 1)) / yMax) * (H - 24);
+  // grid
+  c.font = "10px JetBrains Mono"; c.fillStyle = "#4b5563"; c.strokeStyle = "rgba(255,255,255,.05)";
+  for (const v of [1, 10, 100, 1000]) { c.beginPath(); c.moveTo(pad, Y(v)); c.lineTo(W - pad, Y(v)); c.stroke(); c.fillText(v >= 1000 ? "1km" : v + "m", W - 34, Y(v) - 3); }
+  // jammed region
+  if (jamT != null) { c.fillStyle = "rgba(244,63,94,.06)"; c.fillRect(X(jamT), 0, W - pad - X(jamT), H - 14);
+    c.strokeStyle = "rgba(244,63,94,.6)"; c.setLineDash([3, 3]); c.beginPath(); c.moveTo(X(jamT), 0); c.lineTo(X(jamT), H - 14); c.stroke(); c.setLineDash([]);
+    c.fillStyle = "#f43f5e"; c.fillText("GNSS JAMMED", X(jamT) + 6, 10); }
+  // baseline
+  if (base && jamT != null && baseJamT != null) {
+    c.strokeStyle = "#f43f5e"; c.lineWidth = 1.6; c.beginPath(); let first = true;
+    const st = Math.max(1, Math.floor(base.t.length / 1200));
+    for (let i = 0; i < base.t.length; i += st) { const t = jamT + (base.t[i] - baseJamT); if (t < t0 || t > t1) continue;
+      const x = X(t), y = Y(base.ekf_err[i]); first ? c.moveTo(x, y) : c.lineTo(x, y); first = false; }
+    c.stroke();
+  }
+  // ours (area)
+  const st = Math.max(1, Math.floor(rows.length / 1200)), col = hasVisual ? "34,211,238" : "244,63,94";
+  const g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, `rgba(${col},.35)`); g.addColorStop(1, `rgba(${col},0)`);
+  c.beginPath(); c.moveTo(X(t0), H - 14);
+  for (let i = 0; i < rows.length; i += st) c.lineTo(X(rows[i].t), Y(rows[i].ekf_err ?? 1));
+  c.lineTo(X(t1), H - 14); c.closePath(); c.fillStyle = g; c.fill();
+  c.strokeStyle = `rgb(${col})`; c.lineWidth = 1.4; c.beginPath();
+  for (let i = 0; i < rows.length; i += st) { const x = X(rows[i].t), y = Y(rows[i].ekf_err ?? 1); i ? c.lineTo(x, y) : c.moveTo(x, y); }
+  c.stroke();
+  // dim the future, playhead
+  const px = X(rows[idx].t);
+  c.fillStyle = "rgba(7,9,12,.55)"; c.fillRect(px, 0, W - px, H - 14);
+  c.strokeStyle = "#e8edf3"; c.lineWidth = 1.5; c.beginPath(); c.moveTo(px, 0); c.lineTo(px, H - 14); c.stroke();
+  c.fillStyle = "#e8edf3"; c.beginPath(); c.arc(px, H - 14, 4, 0, 7); c.fill();
+  // time ticks
+  c.fillStyle = "#4b5563"; for (let t = 0; t <= t1; t += 120) if (t >= t0) c.fillText(mmss(t), Math.max(0, X(t) - 14), H - 1);
+}
+
+function seek(ev) {
+  const cv = $("chart"), b = cv.getBoundingClientRect(), f = Math.min(1, Math.max(0, (ev.clientX - b.left - 6) / (b.width - 12)));
+  const t = rows[0].t + f * (rows[rows.length - 1].t - rows[0].t);
+  let lo = 0, hi = rows.length - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (rows[m].t < t) lo = m + 1; else hi = m; }
+  idx = lo; playT = rows[idx].t; alertShown = true; playing = false; $("play").textContent = "▶"; render();
+}
+let dragging = false;
+$("chart").onpointerdown = e => { dragging = true; $("chart").setPointerCapture(e.pointerId); seek(e); };
+$("chart").onpointermove = e => { if (dragging) seek(e); };
+$("chart").onpointerup = () => dragging = false;
 
 function tick(ts) {
-  if (playing && rows.length) {
-    const dt = (ts - lastTick) / 1000 * parseFloat($("speed").value);
-    simT = (rows[idx]?.t ?? 0) + dt;
-    while (idx < rows.length - 1 && rows[idx + 1].t <= simT) idx++;
-    if (idx >= rows.length - 1 && !live) { playing = false; $("play").textContent = "▶"; }
-    render();
+  if (playing && rows.length && !live) {
+    playT += Math.min(ts - lastTs, 100) / 1000 * +$("speed").value;
+    const i0 = idx;
+    while (idx < rows.length - 1 && rows[idx + 1].t <= playT) idx++;
+    if (idx >= rows.length - 1) { playing = false; $("play").textContent = "↺"; }
+    if (idx !== i0) render();
   }
-  lastTick = ts;
-  requestAnimationFrame(tick);
+  lastTs = ts; requestAnimationFrame(tick);
 }
+setInterval(async () => { if (live && RUN && await pull()) { idx = rows.length - 1; render(); } }, 1000);
 
-setInterval(async () => {
-  if (!live || !RUN) return;
-  if (await pull()) { idx = rows.length - 1; render(); }
-}, 1000);
-
-$("run").onchange = e => openRun(e.target.value);
-$("play").onclick = () => { playing = !playing; $("play").textContent = playing ? "❚❚" : "▶"; if (idx >= rows.length - 1) idx = 0; };
-$("slider").oninput = e => { idx = +e.target.value; playing = false; $("play").textContent = "▶"; render(); };
-$("follow").onclick = () => { follow = !follow; $("follow").classList.toggle("on", follow); if (!follow) map.fitBounds(INFO.bounds); else render(); };
+$("run").onchange = e => { history.replaceState(null, "", "?run=" + e.target.value); openRun(e.target.value); };
+$("play").onclick = () => {
+  if (idx >= rows.length - 1) { idx = 0; playT = rows[0].t; alertShown = false; resetTargets(); }
+  playing = !playing; playT = rows[idx].t; $("play").textContent = playing ? "❚❚" : "▶";
+};
+$("recenter").onclick = () => { follow = true; $("recenter").style.display = "none"; render(); };
 $("live").onclick = () => { live = !live; $("live").classList.toggle("on", live); if (live) { idx = rows.length - 1; render(); } };
+window.onresize = () => drawChart();
+document.onkeydown = e => { if (e.code === "Space" && e.target.tagName !== "SELECT") { e.preventDefault(); $("play").click(); } };
 requestAnimationFrame(tick);
 loadRuns();
 </script>
