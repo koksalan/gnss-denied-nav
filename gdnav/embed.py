@@ -38,6 +38,20 @@ class DinoEmbedder(torch.nn.Module):
         return F.normalize(d, dim=-1)
 
 
+def load_embedder(model: str, pool: str, weights: str | None, device: str) -> torch.nn.Module:
+    """DINOv2 teacher (plain state dict / no weights) or a distilled student (checkpoint with its config)."""
+    ckpt = torch.load(weights, map_location=device) if weights else None
+    if isinstance(ckpt, dict) and "student_config" in ckpt:
+        from .student import StudentEmbedder
+        m = StudentEmbedder(**ckpt["student_config"], pretrained=False)
+        m.load_state_dict(ckpt["state_dict"])
+    else:
+        m = DinoEmbedder(model, pool=pool)
+        if ckpt is not None:
+            m.load_state_dict(ckpt)
+    return m.to(device).eval()
+
+
 def to_tensor(batch: list[np.ndarray]) -> torch.Tensor:
     return torch.from_numpy(np.stack(batch)).permute(0, 3, 1, 2).float() / 255.0
 

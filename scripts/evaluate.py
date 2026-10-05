@@ -14,11 +14,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pandas as pd
-import torch
 from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from gdnav.embed import DinoEmbedder  # noqa: E402
+from gdnav.embed import load_embedder  # noqa: E402
 from gdnav.evaluation import evaluate_retrieval  # noqa: E402
 from gdnav.geo import haversine_m  # noqa: E402
 from gdnav.prepared import CONFIG_ROOT, PreparedFlight  # noqa: E402
@@ -54,9 +53,7 @@ def main():
     device = "cuda"
     out = Path("outputs") / "eval" / args.tag
     out.mkdir(parents=True, exist_ok=True)
-    model = DinoEmbedder(args.model, pool=args.pool).to(device).eval()
-    if args.weights:
-        model.load_state_dict(torch.load(args.weights, map_location=device))
+    model = load_embedder(args.model, args.pool, args.weights, device)   # teacher or distilled student
     reranker = Reranker(device) if args.rerank_k else None
 
     summary, rows = {"args": vars(args), "flights": {}}, []

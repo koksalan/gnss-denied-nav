@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 import torch
 
-from .embed import DinoEmbedder, embed_images
+from .embed import embed_images, load_embedder
 from .geo import SatelliteMap, haversine_m, meters_per_degree
 from .mapfeatures import MapFeatures
 from .pose import intrinsics, solve_pose
@@ -55,12 +55,11 @@ class LocalizerConfig:
 
 class Localizer:
     def __init__(self, sat: SatelliteMap, cfg: LocalizerConfig, weights: str | None, device: str = "cuda",
-                 bounds_ll: tuple[float, float, float, float] | None = None):
-        """bounds_ll = (lat_min, lon_min, lat_max, lon_max) restricts the database to the operation area."""
+                 bounds_ll: tuple[float, float, float, float] | None = None, mapf: MapFeatures | None = None):
+        """bounds_ll = (lat_min, lon_min, lat_max, lon_max) restricts the database to the operation area.
+        mapf: reuse precomputed map features (e.g. several embedders evaluated on the same map)."""
         self.sat, self.cfg, self.device = sat, cfg, device
-        self.model = DinoEmbedder(cfg.model, pool=cfg.pool).to(device).eval()
-        if weights:
-            self.model.load_state_dict(torch.load(weights, map_location=device))
+        self.model = load_embedder(cfg.model, cfg.pool, weights, device)
         self.reranker = Reranker(device)
         gsd = cfg.patch_m / cfg.px
         self.overview = sat.read_overview(gsd)
@@ -88,8 +87,8 @@ class Localizer:
         m_lat, m_lon = meters_per_degree(float(self.tiles_ll[:, 0].mean()))
         self._tiles_m = torch.from_numpy(np.stack([self.tiles_ll[:, 0] * m_lat, self.tiles_ll[:, 1] * m_lon], 1)).to(device)
         self._mpd = (m_lat, m_lon)
-        self.mapf = None
-        if cfg.fast and bounds_ll is not None:
+        self.mapf = mapf
+        if self.mapf is None and cfg.fast and bounds_ll is not None:
             la0, lo0, la1, lo1 = bounds_ll
             center = ((la0 + la1) / 2, (lo0 + lo1) / 2)
             extent = max((la1 - la0) * m_lat, (lo1 - lo0) * m_lon) + 600.0     # margin for windows at the edge

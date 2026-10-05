@@ -7,7 +7,8 @@ position to the autopilot (ArduPilot) so the mission continues when GNSS is jamm
 > ArduPilot SITL + Gazebo) · **Sprint 3 done**: realistic simulation — the simulated camera sees real drone
 > photos, with sensor errors: over 18.5 min of GNSS jamming the error stays **≤ 94 m** with visual GPS vs **840 m
 > and growing** without it. Detected vehicles are geolocated without GNSS to **1.7 m** median (220 m without
-> visual navigation), shown live in a web ground station.
+> visual navigation), shown live in a web ground station. A distilled 22 M-parameter model (INT8, 12 ms on CPU) matches the
+> 86 M teacher, and no confident fix was off by more than 100 m under 11 hard conditions (fog, cloud, dusk, weak datalink, ...).
 
 ![match example](docs/match_example.jpg)
 *Unseen test flight 11. Top: 291 consistent matches → confident fix. Bottom: season change between photo and
@@ -295,6 +296,91 @@ computed with its pose (red) land on empty ground.*
 ![GCS, jamming](docs/gcs_jam_alert.png)
 *The moment GNSS is lost.*
 
+## Results — Sprint 4a: hard conditions and a model small enough for the aircraft
+
+Two questions an onboard system has to answer: *does it hold up when conditions are bad*, and *does it fit on the
+aircraft*. Everything below is on the real held-out flights (03, 04, 11), never seen in training.
+
+### Hard test scenarios
+
+11 conditions applied to the **raw camera frame** (`gdnav/corruptions.py`), then the whole localizer runs:
+retrieval → LightGlue → position, global search over the whole map, no prior.
+
+![hard scenarios](docs/hard_scenarios.jpg)
+*The same frame under each scenario, as the localizer sees it (north-up patch).*
+
+**Hard-condition training.** The fine-tuning was repeated with cloud shadows, plasma clouds, darkness + noise,
+motion blur, low resolution + JPEG, over-exposure and heading/scale errors added on the drone side
+(`train_finetune.py --aug robust`). These are implemented differently from the test scenarios (kornia on the
+224 px patch vs. OpenCV on the raw frame), so the test is not simply memorised.
+
+### Distillation: 86 M → 22 M → 5 M parameters
+
+The robust DINOv2-base is the teacher; two students are trained with task loss + **relational KD** (match the
+teacher's similarity distribution over the batch — retrieval is about ranking, not absolute vectors) + feature KD,
+with extra unlabeled satellite crops (the map is free data) (`scripts/distill.py`, walkthrough in
+[`notebooks/distillation_explained.ipynb`](notebooks/distillation_explained.ipynb)). Each student is also trained
+**without** the teacher, same recipe, as the control.
+
+| model | params | test R@1 < 50 m | R@10 < 50 m |
+|---|---|---|---|
+| DINOv2-base, pretrained | 86 M | 0.182 | 0.472 |
+| DINOv2-base, fine-tuned (Sprint 1) | 86 M | 0.631 | 0.909 |
+| **DINOv2-base, + hard-condition training** | 86 M | **0.680** | 0.927 |
+| DINOv2-small, no teacher | 22 M | 0.645 | 0.917 |
+| **DINOv2-small, distilled** | 22 M | **0.689** | **0.942** |
+| MobileNetV3-Large, no teacher | 5 M | 0.614 | 0.898 |
+| **MobileNetV3-Large, distilled** | 5 M | **0.684** | 0.917 |
+
+Hard-condition training helps even on clean images (+5 points). Distillation is worth +4.4 (ViT-S) and +7.0
+(MobileNet) points over the same student without a teacher; both students reach the teacher's level.
+
+### Full localizer under hard conditions
+
+Usable fix = the system says it is confident **and** it is within 50 m. 263 frames × 12 scenarios × 4 models
+(`scripts/eval_robustness.py`, `scripts/plot_robustness.py`):
+
+![robustness](docs/robustness.png)
+
+| scenario | fine-tuned | + hard training | distilled ViT-S | distilled MobileNet |
+|---|---|---|---|---|
+| clean | 87 % | 88 % | 88 % | 86 % |
+| dusk + sensor noise | 83 % | 86 % | 87 % | 82 % |
+| 35 % cloud cover | 78 % | 83 % | 83 % | **67 %** |
+| weak datalink (1/6 res, JPEG 20) | 35 % | 39 % | 41 % | 38 % |
+| fog + weak link + compass 5° + baro +10 % | 45 % | 46 % | 50 % | 48 % |
+
+- **Zero confident fixes off by more than 100 m in ~12 600 localizations**, in every scenario and with every model:
+  when the image is too degraded, the system says "not confident" instead of sending a wrong position.
+- Compass error (+10°) and barometric altitude error (±20 %) cost little: LightGlue + RANSAC absorb them.
+- **The weak link is the real limit**, and it is not the network: retrieval still finds the right place among the
+  top 10 for 91 % of frames (distilled ViT-S, vs 67 % for the Sprint 1 model), but LightGlue cannot find enough
+  keypoints in a 1/6-resolution image. Design consequence: localize **onboard** on the full-resolution frame, not on
+  the downlinked video.
+- The 5 M MobileNet matches the teacher on clean images but is clearly weaker when part of the frame is covered
+  by cloud (67 % vs 83 %). **The distilled ViT-S is the onboard choice**: teacher-level or better in every scenario.
+
+### Size, speed, INT8
+
+Batch 1, 224 px. CPU = ONNX Runtime, 4 threads (a desktop CPU, as a proxy for an embedded one; not a Jetson
+measurement). `scripts/bench_embedders.py`, `scripts/eval_int8.py`.
+
+| model | params | GMACs | CPU FP32 | **CPU INT8** | INT8 file | test R@1 INT8 | map DB 10×10 km |
+|---|---|---|---|---|---|---|---|
+| DINOv2-base (teacher) | 86.6 M | 23.2 | 93 ms | 38 ms | 121 MB | 0.676 | 246 MB |
+| **distilled ViT-S** | 22.5 M | 6.1 | 26 ms | **11.7 ms** | **27 MB** | **0.690** | 82 MB |
+| distilled MobileNetV3 | 4.7 M | 0.2 | 1.8 ms | — | 14 MB | 0.683 | 82 MB |
+
+- **Naive INT8 breaks DINOv2-base**: descriptors move to cosine 0.49 of the FP32 ones. A per-layer sensitivity
+  analysis (quantize one layer group at a time on calibration patches) shows a single MLP — block 8 — collapses
+  the descriptor on its own (outlier activations, as reported for large ViTs). Keeping 2 of 96 matrix multiplies
+  in FP32 gives cosine 0.996 and no retrieval loss (0.680 → 0.676).
+- **The distilled ViT-S has no such outlier layer** and quantizes as-is (cosine 0.999). Result: **8× faster on CPU
+  than the FP32 teacher, 13× smaller, same accuracy.**
+- MobileNet: dynamic INT8 in ONNX Runtime only covers matrix multiplies, so its convolutions stay FP32 — at 1.8 ms
+  it does not need it.
+- On the RTX 5090 every model takes ~4–5 ms at batch 1 (launch-overhead bound); the gain is on small hardware.
+
 ## Reproduce
 
 ```bash
@@ -333,6 +419,15 @@ python scripts/eval_det_matrix.py
 WORLD=visloc03_real_targets EXTRA_PARAMS=$PWD/sim/params/errors.parm bash sim/run_experiment.sh geo_visual --pose pnp     --duration 900 --detector outputs/det/det_mixed/weights/best.pt --frame-every 3
 python sim/analyze_geoloc.py geo_visual geo_control
 python gcs/server.py                                   # -> http://127.0.0.1:8050 (replay or LIVE)
+
+# Sprint 4a: hard conditions, distillation, INT8
+python scripts/train_finetune.py --train 01,02,05,08,09,10 --val 06 --aug robust --out outputs/finetune/s1_robust
+python scripts/distill.py --student dinov2_small --out outputs/distill/vits_kd     # --no-teacher for the control
+python scripts/distill.py --student mobilenetv3  --out outputs/distill/mnv3_kd
+python scripts/evaluate.py --flights 03,04,11 --weights outputs/distill/vits_kd/best.pt --tag test_kd_vits
+python scripts/eval_robustness.py --every 8 --tag main --models ft=outputs/finetune/s1/best.pt,ft_robust=outputs/finetune/s1_robust/best.pt,vits_kd=outputs/distill/vits_kd/best.pt,mnv3_kd=outputs/distill/mnv3_kd/best.pt
+python scripts/bench_embedders.py --models ft_robust=outputs/finetune/s1_robust/best.pt,vits_kd=outputs/distill/vits_kd/best.pt
+python scripts/eval_int8.py --models ft_robust=outputs/finetune/s1_robust/best.pt,vits_kd=outputs/distill/vits_kd/best.pt
 ```
 
 ## Roadmap
@@ -344,4 +439,5 @@ python gcs/server.py                                   # -> http://127.0.0.1:805
 - [x] Sprint 3b.3 — localizability map, A* vs RL (PPO) route planning, closed-loop route flights
 - [x] Sprint 3c — synthetic-data vehicle detector (sim-to-real matrix), GNSS-free target geolocation, ground-station panel
 - [ ] Next — oblique matching in turns, visual landing
-- [ ] Sprint 4 — ONNX/TensorRT latency, demo video, model release
+- [x] Sprint 4a — hard-condition benchmark + training, distillation (86 M → 22 M / 5 M), sensitivity-aware INT8 ONNX
+- [ ] Sprint 4b — latency on embedded hardware (Jetson / TensorRT), demo video, model release

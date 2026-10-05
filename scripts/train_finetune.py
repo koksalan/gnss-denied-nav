@@ -49,22 +49,52 @@ def far_apart_batches(pf: PreparedFlight, batch: int, min_sep_m: float, rng: ran
 
 
 class Augment(torch.nn.Module):
-    """GPU augmentations. Drone side gets haze/blur/color shifts + heading noise; satellite side mild color."""
+    """GPU augmentations. Drone side gets haze/blur/color shifts + heading noise; satellite side mild color.
 
-    def __init__(self, px: int, heading_noise_deg: float):
+    mode="robust" adds hard flight conditions on the drone side (each with its own probability): plasma clouds and
+    cloud shadows, darkness + sensor noise, motion blur, low resolution + JPEG, overexposure, stronger heading
+    error and scale error (barometric altitude). Implemented on the 224 px patch with kornia - unlike the test
+    scenarios (gdnav/corruptions.py, raw frame, OpenCV) - so the test conditions are not simply memorised.
+    """
+
+    def __init__(self, px: int, heading_noise_deg: float, mode: str = "basic"):
         super().__init__()
+        self.mode = mode
         self.drone = torch.nn.Sequential(
             K.ColorJiggle(0.3, 0.3, 0.3, 0.03, p=0.9),
             K.RandomGaussianBlur((5, 5), (0.1, 1.5), p=0.3),
             K.RandomRotation(heading_noise_deg, p=1.0),
         )
+        if mode == "robust":
+            self.hard = torch.nn.Sequential(
+                K.RandomAffine(degrees=8.0, scale=(0.8, 1.25), p=0.5),            # compass + baro error
+                K.RandomPlasmaShadow(roughness=(0.2, 0.5), shade_intensity=(-0.4, -0.1), shade_quantity=(0.0, 0.4), p=0.25),
+                K.RandomPlasmaBrightness(roughness=(0.1, 0.3), intensity=(0.1, 0.35), p=0.2),   # clouds / fog patches
+                K.RandomMotionBlur(kernel_size=(5, 11), angle=180.0, direction=(-1.0, 1.0), p=0.25),
+                K.RandomGamma(gamma=(1.0, 2.2), gain=(0.4, 1.0), p=0.25),          # dusk
+                K.RandomGaussianNoise(std=0.05, p=0.25),
+                K.RandomBrightness(brightness=(1.2, 1.6), p=0.15),                 # overexposure
+                K.RandomJPEG(jpeg_quality=(10.0, 50.0), p=0.25),
+            )
         self.sat = K.ColorJiggle(0.2, 0.2, 0.2, 0.02, p=0.8)
         self.register_buffer("mask", torch.from_numpy(circle_mask(px)).float()[None, None], persistent=False)
 
+    def _lowres(self, q: torch.Tensor, p: float = 0.2) -> torch.Tensor:
+        sel = torch.rand(q.shape[0], device=q.device) < p
+        if sel.any():
+            f = float(torch.empty(1).uniform_(0.15, 0.4))
+            small = F.interpolate(q[sel], scale_factor=f, mode="area")
+            q = q.clone()
+            q[sel] = F.interpolate(small, size=q.shape[-2:], mode="bilinear", align_corners=False)
+        return q
+
     def forward(self, q: torch.Tensor, s: torch.Tensor):
         q = self.drone(q)
-        haze = torch.rand(q.shape[0], 1, 1, 1, device=q.device) * 0.35
+        hmax = 0.5 if self.mode == "robust" else 0.35
+        haze = torch.rand(q.shape[0], 1, 1, 1, device=q.device) * hmax
         q = q * (1 - haze) + haze * 0.75                     # simple atmospheric haze
+        if self.mode == "robust":
+            q = self._lowres(self.hard(q).clamp(0, 1))
         return q * self.mask, self.sat(s) * self.mask
 
 
@@ -92,6 +122,7 @@ def main():
     ap.add_argument("--min-sep-m", type=float, default=150.0)
     ap.add_argument("--jitter-m", type=float, default=15.0)
     ap.add_argument("--heading-noise", type=float, default=5.0)
+    ap.add_argument("--aug", default="basic", choices=["basic", "robust"])
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="outputs/finetune/run")
     args = ap.parse_args()
@@ -115,7 +146,7 @@ def main():
     log_t = torch.nn.Parameter(torch.tensor(math.log(1 / 0.07), device=device))
     params = [p for p in model.parameters() if p.requires_grad]
     opt = torch.optim.AdamW([{"params": params, "lr": args.lr}, {"params": [log_t], "lr": 1e-3}], weight_decay=0.05)
-    aug = Augment(train[0].px, args.heading_noise).to(device)
+    aug = Augment(train[0].px, args.heading_noise, args.aug).to(device)
 
     # rough step count for the cosine schedule
     steps_per_epoch = sum(max(1, len(pf.queries) // (args.batch // 2)) for pf in train)
