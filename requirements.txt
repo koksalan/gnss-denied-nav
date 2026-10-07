@@ -1,3 +1,4 @@
+# core: visual localization
 torch>=2.4
 torchvision
 transformers>=4.45
@@ -6,7 +7,22 @@ faiss-cpu
 rasterio
 opencv-python
 numpy
+scipy
 pandas
 matplotlib
 tqdm
+# training, distillation, deployment
+kornia
+timm
+onnx
+onnxruntime
+scikit-learn
+joblib
+# detection, planning, simulation link, ground station
+ultralytics
+stable-baselines3
+gymnasium
 pymavlink
+imageio
+fastapi
+uvicorn

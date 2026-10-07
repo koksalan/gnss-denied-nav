@@ -24,13 +24,17 @@ def analyze(tag: str, goal: tuple[float, float], arrive_m: float) -> dict:
     arr = j[j.to_goal_m < arrive_m]
     t_arr = arr.t.iloc[0] if len(arr) else j.t.iloc[-1]
     seg = j[j.t <= t_arr]
-    sent_t = seg.t[seg.sent == 1].to_numpy()
+    sent_t = seg.t[seg.sent == 1].to_numpy()                    # map fixes (sent == 2: visual odometry)
     gaps = np.diff(np.r_[seg.t.iloc[0], sent_t, t_arr]) if len(seg) else np.array([np.nan])
+    any_t = seg.t[seg.sent > 0].to_numpy()
+    gaps_any = np.diff(np.r_[seg.t.iloc[0], any_t, t_arr]) if len(seg) else np.array([np.nan])
     return dict(arrived=bool(len(arr)), route_s=round(float(t_arr - seg.t.iloc[0]), 0),
                 ekf_err_median_m=round(float(seg.ekf_err_m.median()), 1),
                 ekf_err_max_m=round(float(seg.ekf_err_m.max()), 1),
                 ekf_err_at_arrival_m=round(float(seg.ekf_err_m.iloc[-1]), 1),
                 longest_fix_gap_s=round(float(np.max(gaps)), 1),
+                longest_update_gap_s=round(float(np.max(gaps_any)), 1),   # map fix or odometry
+                odometry_updates=int((seg.sent == 2).sum()),
                 fixes_per_s=round(len(sent_t) / max(float(t_arr - seg.t.iloc[0]), 1.0), 2))
 
 

@@ -3,12 +3,22 @@
 Localize a UAV **without GPS** by matching its downward camera against a satellite map, then feed the
 position to the autopilot (ArduPilot) so the mission continues when GNSS is jammed.
 
-> Status: **Sprint 1 done** (visual localization on real UAV imagery) · **Sprint 2 done** (closed loop in
-> ArduPilot SITL + Gazebo) · **Sprint 3 done**: realistic simulation — the simulated camera sees real drone
-> photos, with sensor errors: over 18.5 min of GNSS jamming the error stays **≤ 94 m** with visual GPS vs **840 m
-> and growing** without it. Detected vehicles are geolocated without GNSS to **1.7 m** median (220 m without
-> visual navigation), shown live in a web ground station. A distilled 22 M-parameter model (INT8, 12 ms on CPU) matches the
-> 86 M teacher, and no confident fix was off by more than 100 m under 11 hard conditions (fog, cloud, dusk, weak datalink, ...).
+![3D ground station](docs/gcs_3d_chase.png)
+
+**Highlights** (real UAV imagery for training/testing, ArduPilot SITL + Gazebo for the closed loop):
+
+- **Visual localization on unseen regions:** fine-tuned DINOv2 retrieval + LightGlue — median **24 m**, 97 % within
+  100 m, searching the whole map with no position prior.
+- **GNSS jammed for 18.5 min:** autopilot error stays at a **6 m median** with the visual GPS, vs **840 m and growing**
+  without it (sensor errors on, drone-photo terrain).
+- **Visual odometry** bridges map-matching gaps: worst-case error on a hard route **86 → 32 m**.
+- **Targets without GNSS:** vehicles detected (YOLO, synthetic + real data) and geolocated to **1.7 m** median
+  (220 m without visual navigation); moving vehicles get speed (**0.06 m/s** median error) and heading.
+- **Robust and small:** 11 hard conditions (fog, cloud, dusk, weak datalink, compass/baro errors) with **zero confident
+  fixes off by > 100 m**; distilled 22 M-parameter model, **INT8, 12 ms on CPU**, same accuracy as the 86 M teacher.
+- **Ground station** with a 3D view (above), replay or live.
+
+Negative results and failed first attempts are documented next to the results.
 
 ![match example](docs/match_example.jpg)
 *Unseen test flight 11. Top: 291 consistent matches → confident fix. Bottom: season change between photo and
@@ -280,21 +290,19 @@ true-pose projection lands within 10 m of a vehicle. 15-min flights, GNSS jammed
 
 ### Ground-control-station panel
 
-`gcs/` is a web ground station (FastAPI + Leaflet, no build step) that replays, or follows live, any run written
-by `sim/visual_gps.py`: onboard camera with detections, the camera footprint and located targets on the map, and
-the position error compared second by second with the same flight **without** visual navigation. The error chart
-is the timeline (click to seek).
+`gcs/` is a web ground station (FastAPI + Leaflet + three.js, no build step) that replays, or follows live, any run
+written by `sim/visual_gps.py` (`python gcs/server.py` → http://127.0.0.1:8050). The position error is compared
+second by second with the same flight **without** visual navigation.
 
 ![GCS, visual GPS](docs/gcs_geo_visual.png)
-*7.5 min after jamming: the autopilot is within 18 m with visual navigation, 211 m without it (12× more accurate);
-144 vehicles located, 2.7 m median error.*
+*7.5 min after jamming: autopilot within 18 m with visual navigation, 211 m without it; 144 vehicles located,
+2.7 m median error.*
 
 ![GCS, control](docs/gcs_geo_control.png)
 *Same scenario without visual navigation: the autopilot believes it is 211 m away (red track and ring); targets
 computed with its pose (red) land on empty ground.*
 
 ![GCS, jamming](docs/gcs_jam_alert.png)
-*The moment GNSS is lost.*
 
 ## Results — Sprint 4a: hard conditions and a model small enough for the aircraft
 
@@ -381,6 +389,75 @@ measurement). `scripts/bench_embedders.py`, `scripts/eval_int8.py`.
   it does not need it.
 - On the RTX 5090 every model takes ~4–5 ms at batch 1 (launch-overhead bound); the gain is on small hardware.
 
+## Results — Sprint 4b: visual odometry, moving targets, 3D ground station
+
+### Visual odometry between map fixes
+
+Map matching has no drift but is intermittent: over water, uniform fields or in banked turns it finds nothing.
+Frame-to-frame **visual odometry** is the opposite (continuous, drifts), so the two complement each other
+(`gdnav/odometry.py`): track corners between consecutive frames (pyramidal Lucas-Kanade, forward-backward
+check), project every track to the ground with **each frame's own attitude and barometric height**, and take the
+robust median of the ground offsets. Because each frame is projected with its own attitude, pitch/roll changes and
+turns do not appear as false motion.
+
+- Offline, on 800 recorded simulator frames: step error median 0.2 m for 18 m steps; dead reckoning over 20 steps
+  (365 m) drifts **2 m — 0.6 % of the distance flown**.
+- In the loop it is used **only when map fixes have stopped for > 2 s**, anchored at the autopilot's estimate at
+  that moment, with a reported accuracy of 12 m + 3 % of the distance flown since.
+
+**The first integration made things worse** (max error 86 → 145 m): odometry was re-anchored at every single map fix
+(each ~15 m noisy) and sent with a tighter accuracy than the fixes themselves, so it amplified their noise; and in
+banked turns the loop spun on the same frame hundreds of times per second. Anchoring at the EKF's fused estimate
+and using odometry only to bridge gaps fixed both:
+
+| 1.8 km mission over a hard area, GNSS jammed | flight time | EKF error median | **max** | longest gap without a position update |
+|---|---|---|---|---|
+| straight | 131 s | 19.2 m | 86.4 m | 35 s |
+| A\* detour (localizability-aware) | 170 s (+30 %) | 9.6 m | 37.5 m | 9 s |
+| **straight + visual odometry** | **130 s** | 22.1 m | **32.5 m** | **2.4 s** |
+
+Odometry gets the worst case below the A\* detour **without the 30 % longer route** (single flights; the route figure
+above includes this run in purple).
+
+### Moving vehicles: speed and heading without GNSS
+
+12 vehicles drive circles (5–15 m/s, 60–150 m radius) among the 1 220 parked ones (Gazebo `VelocityControl`;
+their true position at any simulation time is known in closed form). Each detection is geolocated with its frame's
+camera pose and tracked **on the map** (`gdnav/tracking.py`): the aircraft moves, so pixel motion means nothing,
+but ground coordinates do. Velocity is a line fit over the last 3 s of a track.
+
+The first version flagged 10 % of **parked** cars as moving — 15 % inside parking lots, 3.6 % elsewhere: with cars
+3 m apart, a track that hops to the neighbouring car looks like a car that moved 3 m. Replaying the recorded
+detections of the 18-min flight (GNSS jammed) through tracker variants (`sim/eval_tracking.py`):
+
+| tracker | moving: precision | recall | parked cars flagged moving | speed error (median) |
+|---|---|---|---|---|
+| speed threshold only (as flown) | 0.20 | 0.94 | 10.1 % | 0.07 m/s |
+| + per-frame common-mode pose correction | 0.20 | 0.95 | 9.8 % | 0.08 m/s |
+| + optimal (Hungarian) association | 0.18 | 0.93 | 11.2 % | 0.07 m/s |
+| **+ motion-consistency test (R² ≥ 0.9)** | **0.86** | **0.84** | **0.37 %** | **0.06 m/s** |
+
+Real motion is a straight line in time; an identity swap is a zig-zag. Requiring the constant-velocity fit to
+explain ≥ 90 % of the position variance removes 96 % of the false alarms. The two "obvious" fixes — correcting
+the shared pose error, optimal association — did not help: the false motion was never a pose problem.
+Heading error is ~9°: on a 100 m circle the 3 s fit lags the turn. (Thresholds were chosen on this flight; a second
+flight would be needed to call it validated.)
+
+### 3D ground station
+
+The ground station (`gcs/`) got a plain-language narrative of what the system is doing right now, the source
+of every position (map match / odometry / none) as a strip under the error chart, a legend, a how-it-works screen,
+moving-vehicle arrows with speed, and a **3D view**: the satellite map as terrain, the aircraft flown with its
+true attitude, the camera frustum, the autopilot's believed position as a red ghost, and chase / orbit / side cameras
+(three.js, no build step).
+
+![GCS 3D](docs/gcs_3d_chase.png)
+*Over the river: no map match, odometry carries the position (purple in the strip below); autopilot within 7 m,
+the same flight without visual navigation is 421 m off.*
+
+![GCS traffic](docs/gcs_traffic_map.png)
+*Two moving vehicles in view with speed and heading; 230 vehicles located without GNSS (4 m median).*
+
 ## Reproduce
 
 ```bash
@@ -428,6 +505,12 @@ python scripts/evaluate.py --flights 03,04,11 --weights outputs/distill/vits_kd/
 python scripts/eval_robustness.py --every 8 --tag main --models ft=outputs/finetune/s1/best.pt,ft_robust=outputs/finetune/s1_robust/best.pt,vits_kd=outputs/distill/vits_kd/best.pt,mnv3_kd=outputs/distill/mnv3_kd/best.pt
 python scripts/bench_embedders.py --models ft_robust=outputs/finetune/s1_robust/best.pt,vits_kd=outputs/distill/vits_kd/best.pt
 python scripts/eval_int8.py --models ft_robust=outputs/finetune/s1_robust/best.pt,vits_kd=outputs/distill/vits_kd/best.pt
+
+# Sprint 4b: odometry, moving vehicles
+MISSION=$PWD/sim/missions/west_straight.json WORLD=visloc03_real EXTRA_PARAMS=$PWD/sim/params/errors.parm     bash sim/run_experiment.sh route_west_straight_vo --pose pnp --jam-at-seq 3 --duration 480 --vo
+python sim/make_targets.py --world visloc03_real --n-random 500 --clusters 60 --per-cluster 12 --n-moving 12 --moving-near-square 1200 --suffix traffic
+WORLD=visloc03_real_traffic EXTRA_PARAMS=$PWD/sim/params/errors.parm bash sim/run_experiment.sh traffic_visual --pose pnp     --duration 1100 --vo --detector outputs/det/det_mixed/weights/best.pt --frame-every 3
+python sim/eval_tracking.py traffic_visual
 ```
 
 ## Roadmap
@@ -438,6 +521,6 @@ python scripts/eval_int8.py --models ft_robust=outputs/finetune/s1_robust/best.p
 - [x] Sprint 3b.2 — speed: pre-flight map features + single-window tracking (7× faster, EKF median 10.6 → 6.3 m)
 - [x] Sprint 3b.3 — localizability map, A* vs RL (PPO) route planning, closed-loop route flights
 - [x] Sprint 3c — synthetic-data vehicle detector (sim-to-real matrix), GNSS-free target geolocation, ground-station panel
-- [ ] Next — oblique matching in turns, visual landing
 - [x] Sprint 4a — hard-condition benchmark + training, distillation (86 M → 22 M / 5 M), sensitivity-aware INT8 ONNX
-- [ ] Sprint 4b — latency on embedded hardware (Jetson / TensorRT), demo video, model release
+- [x] Sprint 4b — visual odometry between map fixes, moving-target speed/heading, 3D ground station
+- [ ] Next — latency on embedded hardware (Jetson / TensorRT), oblique matching in turns, visual landing

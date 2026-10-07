@@ -61,7 +61,11 @@ def info(tag: str):
     m_lat, m_lon = meters_per_degree(w["lat0"])
     half = w["extent_m"] / 2
     targets = [[w["lat0"] + t["north_m"] / m_lat, w["lon0"] + t["east_m"] / m_lon, t["cls"]] for t in w.get("targets", [])]
-    return dict(world=world, lat0=w["lat0"], lon0=w["lon0"], camera=w["camera"], targets=targets,
+    # moving vehicles: id -> [east, north, yaw, speed, yaw_rate] (closed-form circle, see sim/make_targets.py)
+    moving = {t["id"]: [t["east_m"], t["north_m"], t["yaw"], t["speed"], t["yaw_rate"]]
+              for t in w.get("targets", []) if t.get("speed")}
+    return dict(world=world, lat0=w["lat0"], lon0=w["lon0"], camera=w["camera"], targets=targets, moving=moving,
+                extent_m=w["extent_m"],
                 bounds=[[w["lat0"] - half / m_lat, w["lon0"] - half / m_lon], [w["lat0"] + half / m_lat, w["lon0"] + half / m_lon]],
                 map_url=f"/api/map/{world}.jpg")
 

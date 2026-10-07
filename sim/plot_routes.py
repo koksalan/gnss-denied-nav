@@ -16,7 +16,8 @@ import pandas as pd  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 STYLE = {"route_west_straight": ("straight", "#d62728"), "route_west_rl": ("RL (PPO)", "#ff7f0e"),
-         "route_west_astar": ("A* (localizability)", "#1f77b4")}
+         "route_west_astar": ("A* (localizability)", "#1f77b4"),
+         "route_west_straight_vo": ("straight + visual odometry", "#7c3aed")}
 
 
 def main():

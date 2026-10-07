@@ -29,9 +29,12 @@ from gdnav.geo import haversine_m, meters_per_degree  # noqa: E402
 from gdnav.geolocate import camera_pose_from_attitude, pixel_to_ground  # noqa: E402
 from gdnav.pose import intrinsics  # noqa: E402
 from gdnav.localizer import Localizer, LocalizerConfig  # noqa: E402
+from gdnav.odometry import VisualOdometry  # noqa: E402
+from gdnav.tracking import TargetTracker  # noqa: E402
 from gdnav.query import Camera  # noqa: E402
 from gdnav.visloc import VisLocFlight  # noqa: E402
 from pymavlink import mavutil  # noqa: E402
+from make_targets import target_position  # noqa: E402
 from record import AutopilotState, LatestFrame, SimClock  # noqa: E402
 
 M = mavutil.mavlink
@@ -106,6 +109,12 @@ def main():
     ap.add_argument("--attitude", choices=["ekf", "true"], default="ekf",
                     help="attitude used for boresight correction: autopilot estimate, or simulator truth (ablation)")
     ap.add_argument("--detector", default=None, help="YOLO weights: detect + geolocate ground vehicles")
+    ap.add_argument("--vo", action="store_true",
+                    help="visual odometry between map fixes (water, uniform fields, banked turns)")
+    ap.add_argument("--vo-max-s", type=float, default=120.0, help="stop odometry this long after the last map fix")
+    ap.add_argument("--vo-gap-s", type=float, default=2.0, help="odometry only after this long without a map fix")
+    ap.add_argument("--vo-drift", type=float, default=0.03,
+                    help="reported accuracy grows by this fraction of the distance flown since the last map fix")
     ap.add_argument("--frame-every", type=int, default=0,
                     help="ground-station telemetry: save every N-th camera frame (0 = telemetry without frames)")
     ap.add_argument("--tag", default="visual")
@@ -118,6 +127,7 @@ def main():
     cam = Camera(w["camera"]["focal_px"], -1, 90.0)          # mount convention measured in eval_recording.py
     out = ROOT / "outputs" / "sim_runs" / args.tag
     out.mkdir(parents=True, exist_ok=True)
+    (out / "run.json").write_text(json.dumps(dict(world=Path(args.world).stem, args=vars(args)), indent=1))
 
     # control runs (--no-send) still localize when a detector is used (to compare target geolocation), but never send
     loc = None if (args.no_send and not args.detector) else Localizer(
@@ -128,11 +138,18 @@ def main():
     if args.detector:
         from ultralytics import YOLO
         det = YOLO(str(ROOT / args.detector))
-        targets_en = np.array([[t["east_m"], t["north_m"]] for t in w.get("targets", [])])
+        tlist = w.get("targets", [])
+        targets_en = np.array([[t["east_m"], t["north_m"]] for t in tlist])
+        moving_ids = [i for i, t in enumerate(tlist) if t.get("speed")]
+        tracker = TargetTracker()
         det_log = csv.writer(open(out / "detections.csv", "w", newline=""))
         det_log.writerow(["t", "jammed", "cls", "conf", "u", "v", "true_vehicle_id", "dist_truepose_to_vehicle_m",
-                          "err_ekf_pose_m", "err_pnp_pose_m", "pnp_confident"])
-        K_cam = intrinsics(w["camera"]["focal_px"], w["camera"]["width"], w["camera"]["height"])
+                          "err_ekf_pose_m", "err_pnp_pose_m", "pnp_confident",
+                          "track_id", "est_speed", "est_heading", "est_moving", "true_speed", "true_heading"])
+    K_cam = intrinsics(w["camera"]["focal_px"], w["camera"]["width"], w["camera"]["height"])
+    vo = VisualOdometry(K_cam) if args.vo else None
+    vo_en, vo_dist, vo_stamp = None, 0.0, None          # odometry position (east, north from world origin)
+    vo_active = False
     m = ap_state.m
     set_param(m, "SIM_GPS1_ENABLE", 1)
     if not args.no_send:
@@ -175,6 +192,8 @@ def main():
                *(round(st[k], 2) for k in ("roll_deg", "pitch_deg", "yaw_deg",
                                            "true_roll_deg", "true_pitch_deg", "true_yaw_deg"))]
         if loc is None or st["rel_alt_m"] < args.min_alt:
+            if vo is not None:
+                vo.reset()
             wr.writerow(row + ["", "", "", "", "", 0, "", ""])
             tel.write(json.dumps(dict(t=round(t, 2), jammed=int(jammed), mode="climb", alt=round(st["rel_alt_m"], 1),
                                       yaw=round(st["yaw_deg"], 1), true=[st["true_lat"], st["true_lon"]],
@@ -182,11 +201,17 @@ def main():
             time.sleep(0.25)
             continue
         pre = "true_" if args.attitude == "true" else ""
+        vo_step, vo_lost = None, False
+        if vo is not None and sim_stamp != vo_stamp:          # same frame twice: nothing moved
+            vo_step = vo.step(frame, st["rel_alt_m"], st["roll_deg"], st["pitch_deg"], st["yaw_deg"])
+            vo_stamp = sim_stamp
+            vo_lost = vo_step is None                          # lost track: odometry ends until the next map fix
         fix, mode = loc.localize(frame, st["rel_alt_m"], st[pre + "yaw_deg"], cam, prior,
                                  roll_deg=st[pre + "roll_deg"], pitch_deg=st[pre + "pitch_deg"])
         sent, gate, p_bad, acc_pred = 0, "", "", ""
         if mode == "tilted":
-            time.sleep(0.2)                                # banked turn: no fix, don't spin
+            if vo is None or vo_step is None:
+                time.sleep(0.2 if vo is None else 0.05)    # banked turn: no fix, don't spin on the same frame
         else:
             conf = fix.inliers >= loc.cfg.min_inliers
             gate = "off"
@@ -227,6 +252,28 @@ def main():
                 if not args.no_send:
                     send_gps_input(m, gps_epoch_base + clock.now(), lat_s, lon_s, None, acc_m=acc, speed_acc=99.0)
                     sent = 1
+        # ---- visual odometry between map fixes -------------------------------------------------------------
+        # Only when map fixes have stopped (> vo_gap_s): odometry is anchored at the autopilot's estimate at that
+        # moment (it has fused many map fixes; a single fix is ~15 m noisy) and carries it until the next map fix.
+        src = "map" if sent else ""
+        if vo is not None:
+            gap = clock.now() - last_accept_sim
+            if sent or vo_lost or gap < args.vo_gap_s or gap > args.vo_max_s or not jammed or args.no_send:
+                vo_active = False
+            elif vo_step is not None:                          # a new frame with a valid odometry step
+                if not vo_active:
+                    vo_en = np.array([(st["ekf_lon"] - w["lon0"]) * m_lon, (st["ekf_lat"] - w["lat0"]) * m_lat])
+                    vo_dist, vo_active = 0.0, True
+                vo_en = vo_en + np.array([vo_step.d_east, vo_step.d_north])
+                vo_dist += math.hypot(vo_step.d_east, vo_step.d_north)
+                latency = clock.now() - sim_stamp
+                lat_s = w["lat0"] + vo_en[1] / m_lat + (st["ekf_vn"] * latency / m_lat if latency < 3 else 0)
+                lon_s = w["lon0"] + vo_en[0] / m_lon + (st["ekf_ve"] * latency / m_lon if latency < 3 else 0)
+                acc = float(min(60.0, 12.0 + args.vo_drift * vo_dist))
+                send_gps_input(m, gps_epoch_base + clock.now(), lat_s, lon_s, None, acc_m=acc, speed_acc=99.0)
+                sent, src = 2, "vo"
+        vo_err = (float(haversine_m(st["true_lat"], st["true_lon"], w["lat0"] + vo_en[1] / m_lat, w["lon0"] + vo_en[0] / m_lon))
+                  if (vo is not None and vo_en is not None and vo_active) else None)
         dets_tel = []
         if det is not None and mode != "tilted":
             res = det.predict(frame, imgsz=1280, conf=0.3, verbose=False)[0]
@@ -243,21 +290,32 @@ def main():
                 if "R_cw" in fix.extra:
                     p_pnp = pixel_to_ground(uv, K_cam, np.array(fix.extra["R_cw"]),
                                             np.r_[en_ll(fix.lat, fix.lon), fix.extra["height_m"]])
+                for i in moving_ids:                          # moving vehicles: where they are at this frame's time
+                    targets_en[i] = target_position(tlist[i], sim_stamp)
                 d_all = np.linalg.norm(p_true[:, None, :] - targets_en[None], axis=2)
+                # onboard estimate: geolocate with the frame's own PnP pose (EKF pose if PnP failed), then track on the map
+                tracks = tracker.update(sim_stamp, p_pnp if p_pnp is not None else p_ekf, cls)
                 vid = d_all.argmin(1)
                 wh = res.boxes.xywh[:, 2:].cpu().numpy()
                 to_ll = lambda p: [w["lat0"] + p[1] / m_lat, w["lon0"] + p[0] / m_lon]  # noqa: E731
                 for k in range(len(uv)):
                     dets_tel.append(dict(u=float(uv[k, 0]), v=float(uv[k, 1]), w=float(wh[k, 0]), h=float(wh[k, 1]),
                                          cls=int(cls[k]), conf=round(float(cf[k]), 2), true_vid=int(vid[k]),
-                                         ekf=to_ll(p_ekf[k]), pnp=to_ll(p_pnp[k]) if p_pnp is not None else None))
+                                         ekf=to_ll(p_ekf[k]), pnp=to_ll(p_pnp[k]) if p_pnp is not None else None,
+                                         trk=tracks[k].id, spd=round(tracks[k].speed, 1), hdg=round(tracks[k].heading_deg),
+                                         mov=tracker.is_moving(tracks[k])))
                 for k in range(len(uv)):
-                    tv = targets_en[vid[k]]
+                    tv, tt = targets_en[vid[k]], tlist[vid[k]]
+                    tyaw = tt["yaw"] + tt.get("yaw_rate", 0.0) * sim_stamp           # ENU, from east
+                    true_hdg = (90.0 - math.degrees(tyaw)) % 360 if tt.get("speed") else ""
                     det_log.writerow([round(t, 2), int(jammed), cls[k], round(float(cf[k]), 3), round(float(uv[k, 0])),
                                       round(float(uv[k, 1])), int(vid[k]), round(float(d_all[k, vid[k]]), 1),
                                       round(float(np.linalg.norm(p_ekf[k] - tv)), 1),
                                       round(float(np.linalg.norm(p_pnp[k] - tv)), 1) if p_pnp is not None else "",
-                                      int(fix.inliers >= loc.cfg.min_inliers)])
+                                      int(fix.inliers >= loc.cfg.min_inliers),
+                                      tracks[k].id, round(tracks[k].speed, 2), round(tracks[k].heading_deg, 1),
+                                      "" if tracker.is_moving(tracks[k]) is None else int(tracker.is_moving(tracks[k])),
+                                      tt.get("speed", 0.0), round(true_hdg, 1) if true_hdg != "" else ""])
         fix_err = float(haversine_m(st["true_lat"], st["true_lon"], fix.lat, fix.lon)) if fix.inliers else ""
         wr.writerow(row + [fix.lat, fix.lon, round(fix_err, 1) if fix_err != "" else "", fix.inliers, mode, sent,
                            fix.extra.get("height_m", ""), fix.extra.get("off_nadir_deg", ""),
@@ -274,7 +332,8 @@ def main():
             yaw=round(st["yaw_deg"], 1), roll=round(st["roll_deg"], 1), pitch=round(st["pitch_deg"], 1),
             true=[st["true_lat"], st["true_lon"]], ekf=[st["ekf_lat"], st["ekf_lon"]],
             fix=[fix.lat, fix.lon] if fix.inliers else None, ekf_err=round(ekf_err, 1),
-            fix_err=round(fix_err, 1) if fix_err != "" else None, frame=frame_name, dets=dets_tel)) + "\n")
+            fix_err=round(fix_err, 1) if fix_err != "" else None, frame=frame_name, dets=dets_tel,
+            src=src, vo_err=round(vo_err, 1) if vo_err is not None else None, vo_dist=round(vo_dist, 1))) + "\n")
         if int(t) % 15 == 0:
             print(f"t={t:5.0f}s jammed={int(jammed)} ekf_err={ekf_err:6.1f} m  fix_err={fix_err} mode={mode}", flush=True)
             log.flush()

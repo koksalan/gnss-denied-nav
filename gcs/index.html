@@ -8,57 +8,74 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
 <style>
   :root {
-    --bg: #07090c; --glass: rgba(12, 16, 22, .78); --edge: rgba(255, 255, 255, .08); --text: #e8edf3; --muted: #8592a3; --dim: #4b5563;
-    --ours: #22d3ee; --bad: #f43f5e; --ok: #34d399; --amber: #fbbf24;
+    --bg: #07090c; --glass: rgba(12, 16, 22, .80); --edge: rgba(255, 255, 255, .08); --text: #e8edf3; --muted: #8592a3; --dim: #4b5563;
+    --ours: #22d3ee; --vo: #a78bfa; --bad: #f43f5e; --ok: #34d399; --amber: #fbbf24; --move: #fb7185;
     --mono: "JetBrains Mono", ui-monospace, monospace;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body { background: var(--bg); color: var(--text); font: 13px/1.45 Inter, "Segoe UI", system-ui, sans-serif; overflow: hidden; -webkit-font-smoothing: antialiased; }
-  #map { position: fixed; inset: 0; background: var(--bg); }
+  #map, #three { position: fixed; inset: 0; background: var(--bg); }
+  #three { display: none; }
+  body.mode3d #three { display: block; } body.mode3d #map { visibility: hidden; }
   .leaflet-image-layer { filter: saturate(.75) brightness(.78) contrast(1.06); }
   .vignette { position: fixed; inset: 0; pointer-events: none; z-index: 400;
-    background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.55) 100%); }
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.5) 100%); }
   .card { position: fixed; z-index: 500; background: var(--glass); backdrop-filter: blur(14px) saturate(1.2);
     -webkit-backdrop-filter: blur(14px) saturate(1.2); border: 1px solid var(--edge); border-radius: 14px; box-shadow: 0 10px 40px rgba(0,0,0,.45); }
   .label { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
-  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
   /* top bar */
-  #top { left: 16px; right: 16px; top: 16px; height: 56px; display: flex; align-items: center; padding: 0 18px; gap: 18px; }
+  #top { left: 16px; right: 16px; top: 16px; height: 56px; display: flex; align-items: center; padding: 0 18px; gap: 14px; }
   .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .04em; }
   .brand small { display: block; font-weight: 500; color: var(--muted); font-size: 11px; letter-spacing: .02em; }
   .status { margin: 0 auto; display: flex; gap: 10px; align-items: center; }
   .pill { display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 999px; font-weight: 600; font-size: 12px;
-    letter-spacing: .08em; border: 1px solid var(--edge); background: rgba(255,255,255,.03); transition: all .3s; }
+    letter-spacing: .08em; border: 1px solid var(--edge); background: rgba(255,255,255,.03); transition: all .3s; white-space: nowrap; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; }
   .pill.ok { color: var(--ok); } .pill.bad { color: var(--bad); border-color: rgba(244,63,94,.35); background: rgba(244,63,94,.08); }
   .pill.bad .dot { animation: pulse 1s infinite; } .pill.ours { color: var(--ours); border-color: rgba(34,211,238,.3); background: rgba(34,211,238,.07); }
+  .pill.vo { color: var(--vo); border-color: rgba(167,139,250,.35); background: rgba(167,139,250,.08); }
   .pill.dimmed { color: var(--muted); }
   @keyframes pulse { 50% { opacity: .25; } }
   select { background: transparent; color: var(--muted); border: 1px solid var(--edge); border-radius: 8px; padding: 6px 10px; font: inherit; outline: none; }
   select option { background: #111; }
   .btn { background: transparent; border: 1px solid var(--edge); color: var(--muted); border-radius: 8px; padding: 6px 12px; cursor: pointer; font: 600 11px Inter; letter-spacing: .1em; }
   .btn:hover { color: var(--text); } .btn.on { color: var(--bad); border-color: rgba(244,63,94,.4); }
+  .seg { display: flex; border: 1px solid var(--edge); border-radius: 9px; overflow: hidden; }
+  .seg button { background: transparent; border: 0; color: var(--muted); padding: 7px 14px; font: 600 11px Inter; letter-spacing: .12em; cursor: pointer; }
+  .seg button.sel { background: rgba(34,211,238,.14); color: var(--ours); }
+
+  /* narrative */
+  #story { left: 50%; transform: translateX(-50%); top: 84px; max-width: 760px; padding: 9px 18px; font-size: 13.5px; text-align: center; color: #d6dde6; }
+  #story b { color: var(--text); }
 
   /* camera */
-  #camcard { left: 16px; top: 88px; width: 440px; padding: 12px; }
+  #camcard { left: 16px; top: 88px; width: 400px; padding: 12px; }
   #camcard .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
   .rec { color: var(--bad); font: 600 10.5px var(--mono); display: flex; align-items: center; gap: 6px; }
   #camwrap { position: relative; border-radius: 8px; overflow: hidden; background: #000; aspect-ratio: 1280 / 854; }
   #cam { width: 100%; height: 100%; display: block; }
-  #camwrap::after { content: ""; position: absolute; inset: 0; pointer-events: none;
-    background: linear-gradient(transparent 70%, rgba(0,0,0,.55)); }
+  #camwrap::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(transparent 70%, rgba(0,0,0,.55)); }
   .camfoot { position: absolute; left: 10px; right: 10px; bottom: 8px; z-index: 2; display: flex; justify-content: space-between; font: 11px var(--mono); color: #cbd5e1; }
   .fwd { position: absolute; right: 10px; top: 8px; z-index: 2; font: 600 10px var(--mono); color: rgba(255,255,255,.6); letter-spacing: .1em; }
   .miniStats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
   .miniStats div b { display: block; font: 600 15px var(--mono); }
 
+  /* legend */
+  #legend { left: 16px; bottom: 144px; width: 400px; padding: 12px 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; font-size: 11.5px; color: #c4ccd6; }
+  #legend .sw { display: inline-block; width: 18px; vertical-align: middle; margin-right: 8px; }
+  #legend .ln { height: 3px; border-radius: 2px; }
+
   /* metrics */
-  #metrics { right: 16px; top: 88px; width: 330px; padding: 20px; }
-  .hero { font: 600 52px/1 var(--mono); letter-spacing: -.02em; margin: 8px 0 4px; transition: color .4s; }
+  #metrics { right: 16px; top: 88px; width: 320px; padding: 20px; }
+  .hero { font: 600 50px/1 var(--mono); letter-spacing: -.02em; margin: 8px 0 4px; transition: color .4s; }
   .hero small { font-size: 22px; color: var(--muted); margin-left: 4px; }
   .sub { color: var(--muted); font-size: 12px; }
   .compare { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--edge); }
@@ -67,26 +84,33 @@
   .row { display: flex; justify-content: space-between; align-items: baseline; }
   .row b { font: 600 18px var(--mono); }
   .factor { margin-top: 6px; font-weight: 700; font-size: 15px; color: var(--ours); }
-  .targets { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--edge); display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .targets b { display: block; font: 600 24px var(--mono); color: var(--amber); }
+  .targets { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--edge); display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  .targets b { display: block; font: 600 22px var(--mono); color: var(--amber); }
 
   /* timeline */
-  #timeline { left: 16px; right: 16px; bottom: 16px; height: 112px; padding: 12px 18px; display: flex; gap: 16px; align-items: stretch; }
+  #timeline { left: 16px; right: 16px; bottom: 16px; height: 116px; padding: 12px 18px; display: flex; gap: 16px; align-items: stretch; }
   #play { width: 46px; height: 46px; align-self: center; border-radius: 50%; border: 1px solid var(--edge); background: rgba(255,255,255,.05);
     color: var(--text); font-size: 16px; cursor: pointer; flex: none; }
   #play:hover { background: rgba(34,211,238,.15); border-color: var(--ours); }
-  .tlside { display: flex; flex-direction: column; justify-content: center; gap: 6px; flex: none; width: 120px; }
+  .tlside { display: flex; flex-direction: column; justify-content: center; gap: 6px; flex: none; width: 110px; }
   .clock { font: 600 22px var(--mono); }
   #chart { flex: 1; min-width: 0; cursor: ew-resize; }
-  .legend { display: flex; flex-direction: column; justify-content: center; gap: 6px; flex: none; font-size: 11.5px; color: var(--muted); }
-  .legend i { display: inline-block; width: 16px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 8px; }
+  .tlleg { display: flex; flex-direction: column; justify-content: center; gap: 5px; flex: none; font-size: 11px; color: var(--muted); }
+  .tlleg i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 8px; }
 
-  /* aircraft + targets on the map */
+  /* map markers */
   .ac { width: 34px; height: 34px; filter: drop-shadow(0 0 6px rgba(34,211,238,.9)); }
   .tgt { width: 9px; height: 9px; transform: rotate(45deg); border: 1.5px solid var(--amber); background: rgba(251,191,36,.25); animation: pop .6s ease-out; }
   .tgt.bad { border-color: var(--bad); background: rgba(244,63,94,.25); }
+  .mv { position: relative; width: 0; height: 0; }
+  .mv svg { position: absolute; left: -11px; top: -11px; filter: drop-shadow(0 0 4px rgba(251,113,133,.9)); }
+  .mv span { position: absolute; left: 12px; top: -8px; font: 600 10px var(--mono); color: #fff; background: rgba(251,113,133,.85); padding: 1px 4px; border-radius: 3px; white-space: nowrap; }
   @keyframes pop { from { transform: rotate(45deg) scale(3.5); opacity: 0; } to { transform: rotate(45deg) scale(1); opacity: 1; } }
-  #recenter { position: fixed; right: 362px; top: 88px; z-index: 500; display: none; }
+  #recenter { position: fixed; right: 16px; bottom: 144px; z-index: 500; display: none; }
+  #camMode { position: fixed; right: 16px; bottom: 144px; z-index: 500; display: none; background: var(--glass); backdrop-filter: blur(14px); }
+  body.mode3d #camMode { display: flex; } body.mode3d #recenter, body.mode3d #legend { display: none !important; }
+  #note3d { position: fixed; left: 16px; bottom: 144px; z-index: 500; display: none; padding: 8px 12px; font-size: 11.5px; color: #c4ccd6; }
+  body.mode3d #note3d { display: block; }
 
   /* jam alert */
   #alert { position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center; pointer-events: none; opacity: 0; transition: opacity .4s; }
@@ -99,18 +123,28 @@
   #alert.show .l2 { opacity: 1; }
   .leaflet-control-zoom { display: none; }
 
+  /* help */
+  #help { position: fixed; inset: 0; z-index: 950; display: none; align-items: center; justify-content: center; background: rgba(3,5,8,.6); }
+  #help.show { display: flex; }
+  #help .box { width: min(860px, 92vw); padding: 28px 32px; border-radius: 16px; background: rgba(12,16,22,.96); border: 1px solid var(--edge); }
+  #help h2 { margin: 0 0 4px; font-size: 20px; } #help p { color: #c4ccd6; margin: 6px 0 18px; }
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .steps div { padding: 14px; border-radius: 10px; background: rgba(255,255,255,.035); border: 1px solid var(--edge); font-size: 12.5px; color: #c4ccd6; }
+  .steps b { display: block; color: var(--text); margin-bottom: 6px; font-size: 13px; }
+  .steps .n { font: 600 11px var(--mono); color: var(--ours); }
+
   @media (max-width: 1100px) {
     body { overflow: auto; }
-    #map { position: relative; height: 60vh; }
-    .card, #recenter { position: relative; left: auto; right: auto; top: auto; bottom: auto; width: auto; margin: 12px 16px; }
+    #map, #three { position: relative; height: 60vh; }
+    .card, #recenter { position: relative; left: auto; right: auto; top: auto; bottom: auto; width: auto; margin: 12px 16px; transform: none; }
     #top { height: auto; flex-wrap: wrap; padding: 12px; } .status { margin: 0; flex-wrap: wrap; }
-    #timeline { height: 120px; }
-    .vignette { display: none; }
+    #timeline { height: 120px; } .vignette { display: none; } .steps { grid-template-columns: 1fr 1fr; }
   }
 </style>
 </head>
 <body>
 <div id="map"></div>
+<div id="three"></div>
 <div class="vignette"></div>
 
 <div id="top" class="card">
@@ -119,15 +153,19 @@
     <div>VISNAV<small>GNSS-denied navigation · ground station</small></div>
   </div>
   <select id="run" title="flight"></select>
+  <div class="seg" id="view"><button data-v="map" class="sel">MAP</button><button data-v="3d">3D VIEW</button></div>
   <div class="status">
     <div id="gnss" class="pill dimmed"><span class="dot"></span><span>GNSS</span></div>
-    <div id="nav" class="pill dimmed"><span class="dot"></span><span>NAV</span></div>
+    <div id="nav" class="pill dimmed"><span class="dot"></span><span>POSITION</span></div>
   </div>
+  <button id="helpBtn" class="btn" title="how it works">?</button>
   <button id="live" class="btn" title="follow a running flight">● LIVE</button>
 </div>
 
+<div id="story" class="card">—</div>
+
 <div id="camcard" class="card">
-  <div class="head"><span class="label">Onboard camera · nadir</span><span class="rec"><span class="dot"></span>EO</span></div>
+  <div class="head"><span class="label">Onboard camera · looking down</span><span class="rec"><span class="dot"></span>EO</span></div>
   <div id="camwrap"><canvas id="cam" width="640" height="427"></canvas>
     <div class="fwd">FWD ▶</div>
     <div class="camfoot"><span id="camL">—</span><span id="camR"></span></div></div>
@@ -137,6 +175,17 @@
     <div><span class="label">Fix/s</span><b id="m_rate">—</b></div>
     <div><span class="label">Latency</span><b id="m_lat">—</b></div>
   </div>
+</div>
+
+<div id="legend" class="card">
+  <span><svg class="sw" width="18" height="14" viewBox="0 0 34 34"><path d="M17 3 L20 14 L31 19 L31 21.5 L20 19 L19.2 27 L23 29.5 L23 31 L17 29.5 L11 31 L11 29.5 L14.8 27 L14 19 L3 21.5 L3 19 L14 14 Z" fill="#e8edf3"/></svg>aircraft (true position)</span>
+  <span><i class="sw ln" style="background:#fff;opacity:.6"></i>true flight path</span>
+  <span><i class="sw ln" style="background:var(--ours)"></i>autopilot's estimate</span>
+  <span><i class="sw ln" style="background:var(--vo)"></i>… while on odometry</span>
+  <span><i class="sw" style="height:10px;border:1px dashed var(--ours)"></i>what the camera sees</span>
+  <span><i class="sw" style="width:12px;height:12px;border-radius:50%;border:2px solid var(--bad)"></i>autopilot's belief (if off)</span>
+  <span><i class="sw" style="width:9px;height:9px;transform:rotate(45deg);border:1.5px solid var(--amber);margin-left:4px"></i>located vehicle (no GNSS)</span>
+  <span><i class="sw" style="color:var(--move);font-weight:700;width:auto">➤</i>moving vehicle + speed</span>
 </div>
 
 <div id="metrics" class="card">
@@ -151,47 +200,84 @@
     <div class="factor" id="factor"></div>
   </div>
   <div class="targets">
-    <div><span class="label">Targets located</span><b id="t_n">0</b></div>
-    <div><span class="label">Median error</span><b id="t_err">—</b></div>
+    <div><span class="label">Located</span><b id="t_n">0</b></div>
+    <div><span class="label">Moving</span><b id="t_mv" style="color:var(--move)">0</b></div>
+    <div><span class="label">Median err</span><b id="t_err">—</b></div>
   </div>
 </div>
 
 <button id="recenter" class="btn">⌖ RECENTER</button>
+<div id="note3d" class="card">Aircraft drawn 8× larger than the real 2 m wing. <span style="color:#f43f5e">Red ghost</span> = where the autopilot thinks it is · drag in ORBIT mode</div>
+<div id="camMode" class="seg"><button data-c="chase" class="sel">CHASE</button><button data-c="orbit">ORBIT</button><button data-c="side">SIDE</button></div>
 
 <div id="timeline" class="card">
   <button id="play">▶</button>
   <div class="tlside">
-    <span class="label" id="clockLabel">Mission time</span>
+    <span class="label">Mission time</span>
     <span class="clock" id="clock">00:00</span>
     <select id="speed"><option value="1">1×</option><option value="4">4×</option><option value="8" selected>8×</option><option value="16">16×</option><option value="32">32×</option></select>
   </div>
   <canvas id="chart"></canvas>
-  <div class="legend">
-    <span id="lg_ours"><i style="background:var(--ours)"></i>with visual nav</span>
-    <span id="lg_base"><i style="background:var(--bad)"></i>without visual nav</span>
-    <span class="label" style="font-size:9.5px">position error · log</span>
+  <div class="tlleg">
+    <span id="lg_ours"><i style="background:var(--ours)"></i>error, with visual nav</span>
+    <span id="lg_base"><i style="background:var(--bad)"></i>error, without</span>
+    <span><i style="background:var(--ours);height:6px"></i>map match</span>
+    <span><i style="background:var(--vo);height:6px"></i>odometry</span>
+    <span><i style="background:var(--bad);height:6px"></i>no visual position</span>
   </div>
 </div>
 
 <div id="alert"><div class="alertbox"><div class="l1">GNSS SIGNAL LOST</div><div class="l2">VISUAL NAVIGATION ENGAGED</div></div></div>
 
-<script>
+<div id="help"><div class="box">
+  <h2>How the aircraft finds itself without GPS</h2>
+  <p>GNSS (GPS) can be jammed. This flight replays a simulated fixed-wing UAV whose GNSS is switched off mid-flight;
+     the only position information left comes from its downward-looking camera.</p>
+  <div class="steps">
+    <div><span class="n">1</span><b>Camera ↔ satellite map</b>A neural network (DINOv2, fine-tuned) finds where the camera image is on a satellite map; feature matching (LightGlue) pins it to a few meters.</div>
+    <div><span class="n">2</span><b>Sanity check → autopilot</b>The fix is checked against the barometer and IMU, then sent to the ArduPilot autopilot as if it came from a GPS receiver.</div>
+    <div><span class="n">3</span><b>Odometry in between</b>Over water, uniform fields or in turns the map match can fail. Frame-to-frame motion then carries the position until the next match.</div>
+    <div><span class="n">4</span><b>Targets on the ground</b>Vehicles are detected (YOLO), placed on the map with the camera pose of the same frame, and tracked — moving ones get a speed and heading.</div>
+  </div>
+  <p style="margin:18px 0 0">Compare with a <b>control</b> flight (no visual navigation): the autopilot drifts hundreds of meters. Click the error chart at the bottom to jump in time, space = play/pause, <b>3D VIEW</b> to watch the aircraft from outside.</p>
+  <div style="text-align:right;margin-top:14px"><button class="btn" id="helpClose">GOT IT</button></div>
+</div></div>
+
+<script type="module">
 const $ = id => document.getElementById(id);
+let THREE = null, OrbitControls = null;
+try {
+  THREE = await import("three");
+  ({ OrbitControls } = await import("three/addons/controls/OrbitControls.js"));
+} catch (e) { console.warn("3D view unavailable", e); document.querySelector('#view [data-v="3d"]').style.display = "none"; }
+
 let RUN, INFO, rows = [], next = 0, idx = 0, playing = false, live = false, follow = true, lastTs = 0, playT = 0;
 let map, L_, jamT = null, hasVisual = false, base = null, baseJamT = null, camImg = new Image(), camName = null;
-let tgt = new Map(), tgtUpto = -1, alertShown = false;
+let tgt = new Map(), tgtUpto = -1, alertShown = false, mode = "map";
 const M_LAT = 111320, mLon = lat => 111320 * Math.cos(lat * Math.PI / 180);
-
 const fmtM = v => v == null ? "—" : v >= 1000 ? (v / 1000).toFixed(2) + " km" : v >= 100 ? v.toFixed(0) + " m" : v.toFixed(1) + " m";
 const mmss = s => { s = Math.max(0, Math.round(s)); return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); };
 const api = async p => { const r = await fetch(p); if (!r.ok) throw new Error(p); return r.json(); };
 const dist = (a, b) => Math.hypot((a[0] - b[0]) * M_LAT, (a[1] - b[1]) * mLon(a[0]));
+const srcOf = r => r.src || (r.sent ? "map" : "");
+// local metric frame (east, north) around the map centre
+const toEN = ll => [(ll[1] - INFO.lon0) * mLon(INFO.lat0), (ll[0] - INFO.lat0) * M_LAT];
+const toLL = en => [INFO.lat0 + en[1] / M_LAT, INFO.lon0 + en[0] / mLon(INFO.lat0)];
+
+function movingTruth(vid, simT) {        // closed-form circle, same as sim/make_targets.py target_position
+  const m = INFO.moving && INFO.moving[vid]; if (!m || simT == null) return null;
+  const [e0, n0, y0, v, w] = m, y1 = y0 + w * simT;
+  const en = Math.abs(w) < 1e-9 ? [e0 + v * simT * Math.cos(y0), n0 + v * simT * Math.sin(y0)]
+    : [e0 + v / w * (Math.sin(y1) - Math.sin(y0)), n0 - v / w * (Math.cos(y1) - Math.cos(y0))];
+  return toLL(en);
+}
 
 async function loadRuns() {
   const runs = await api("/api/runs");
   $("run").innerHTML = runs.map(r => `<option>${r.tag}</option>`).join("");
-  const want = new URLSearchParams(location.search).get("run");
+  const q = new URLSearchParams(location.search), want = q.get("run");
   const pick = runs.find(r => r.tag === want) || runs.find(r => !/control/.test(r.tag)) || runs[0];
+  if (q.get("view") === "3d" && THREE) setView("3d");
   if (pick) { $("run").value = pick.tag; await openRun(pick.tag, runs); }
 }
 
@@ -199,16 +285,13 @@ async function openRun(tag, runs) {
   RUN = tag; rows = []; next = 0; idx = 0; jamT = null; hasVisual = false; camName = null; alertShown = false;
   INFO = await api(`/api/run/${tag}/info`);
   initMap();
+  if (THREE) v3.init();
   await pull();
-  // baseline: the same scenario flown without visual navigation (e.g. geo_visual -> geo_control)
   base = null; baseJamT = null;
   runs = runs || await api("/api/runs");
   const prefix = tag.split("_")[0];
   const b = hasVisual && (runs.find(r => r.tag === prefix + "_control") || runs.find(r => /control/.test(r.tag) && r.tag !== tag));
-  if (b) {
-    base = await api(`/api/run/${b.tag}/series`);
-    const j = base.jammed.indexOf(1); baseJamT = j >= 0 ? base.t[j] : null;
-  }
+  if (b) { base = await api(`/api/run/${b.tag}/series`); const j = base.jammed.indexOf(1); baseJamT = j >= 0 ? base.t[j] : null; }
   $("lg_ours").style.display = hasVisual ? "" : "none";
   $("lg_base").style.display = base || !hasVisual ? "" : "none";
   idx = live ? rows.length - 1 : 0; playT = rows[idx]?.t ?? 0;
@@ -219,30 +302,27 @@ async function openRun(tag, runs) {
 
 async function pull() {
   const d = await api(`/api/run/${RUN}/telemetry?start=${next}`);
-  for (const r of d.rows) {
-    rows.push(r);
-    if (jamT === null && r.jammed) jamT = r.t;
-    if (r.sent) hasVisual = true;
-  }
+  for (const r of d.rows) { rows.push(r); if (jamT === null && r.jammed) jamT = r.t; if (r.sent) hasVisual = true; }
   next = d.next;
   return d.rows.length > 0;
 }
 
-// ---------- map ----------
+// ================= 2D map =================
 function initMap() {
   if (map) map.remove();
   map = L.map("map", { zoomSnap: 0.25, preferCanvas: true, attributionControl: false, zoomControl: false });
   L.imageOverlay(INFO.map_url, INFO.bounds).addTo(map);
   map.setView([INFO.lat0, INFO.lon0], 16.25);
-  map.on("dragstart", () => { follow = false; $("recenter").style.display = "block"; });
+  map.on("dragstart", () => { follow = false; if (mode === "map") $("recenter").style.display = "block"; });
   const R = L.canvas({ padding: .5 });
   L_ = {
     foot: L.polygon([], { renderer: R, color: "#22d3ee", weight: 1, opacity: .7, fillColor: "#22d3ee", fillOpacity: .08, dashArray: "3 4" }).addTo(map),
     truth: L.polyline([], { renderer: R, color: "#ffffff", weight: 1.5, opacity: .55 }).addTo(map),
     glow: L.polyline([], { renderer: R, color: "#22d3ee", weight: 9, opacity: .16 }).addTo(map),
     est: L.polyline([], { renderer: R, color: "#22d3ee", weight: 2.5, opacity: .95 }).addTo(map),
+    vo: L.polyline([], { renderer: R, color: "#a78bfa", weight: 3.5, opacity: 1 }).addTo(map),
     err: L.polyline([], { renderer: R, color: "#f43f5e", weight: 1.5, dashArray: "4 4" }).addTo(map),
-    targets: L.layerGroup().addTo(map),
+    targets: L.layerGroup().addTo(map), movers: L.layerGroup().addTo(map),
     ac: L.marker([INFO.lat0, INFO.lon0], { icon: L.divIcon({ className: "", iconSize: [34, 34], iconAnchor: [17, 17],
       html: `<svg class="ac" id="acsvg" viewBox="0 0 34 34"><path d="M17 3 L20 14 L31 19 L31 21.5 L20 19 L19.2 27 L23 29.5 L23 31 L17 29.5 L11 31 L11 29.5 L14.8 27 L14 19 L3 21.5 L3 19 L14 14 Z" fill="#e8edf3" stroke="#22d3ee" stroke-width="1"/></svg>` }),
       zIndexOffset: 1000 }).addTo(map),
@@ -250,15 +330,12 @@ function initMap() {
   };
 }
 
-function footprint(r) {
-  // camera: image +u = forward, +v = right wing (see sim/zephyr camera mount); flat ground, nadir approximation
+function footprintEN(r) {
+  // camera: image +u = forward, +v = right wing (sim camera mount); flat ground, nadir approximation
   const cam = INFO.camera, f = cam.focal_px, a = Math.max(r.alt || 0, 1);
-  const hw = cam.width / 2 * a / f, hh = cam.height / 2 * a / f, y = (r.yaw || 0) * Math.PI / 180;
-  const pos = r.true;   // drawn around the aircraft symbol
-  return [[hw, -hh], [hw, hh], [-hw, hh], [-hw, -hh]].map(([fw, rt]) => {
-    const n = fw * Math.cos(y) - rt * Math.sin(y), e = fw * Math.sin(y) + rt * Math.cos(y);
-    return [pos[0] + n / M_LAT, pos[1] + e / mLon(pos[0])];
-  });
+  const hw = cam.width / 2 * a / f, hh = cam.height / 2 * a / f, y = (r.yaw || 0) * Math.PI / 180, p = toEN(r.true);
+  return [[hw, -hh], [hw, hh], [-hw, hh], [-hw, -hh]].map(([fw, rt]) =>
+    [p[0] + fw * Math.sin(y) + rt * Math.cos(y), p[1] + fw * Math.cos(y) - rt * Math.sin(y)]);
 }
 
 function resetTargets() { tgt.clear(); tgtUpto = -1; L_.targets.clearLayers(); }
@@ -268,28 +345,36 @@ function updateTargets() {
   const src = hasVisual ? "pnp" : "ekf";
   for (let i = tgtUpto + 1; i <= idx; i++) {
     const r = rows[i];
-    if (!r.jammed) continue;                         // only targets located without GNSS
+    if (!r.jammed) continue;                                    // only targets located without GNSS
     for (const d of r.dets || []) {
-      const p = d[src]; if (!p || d.true_vid < 0) continue;
-      const truth = INFO.targets[d.true_vid]; if (!truth) continue;
-      const e = dist(p, truth);
-      if (e > 2000) continue;
+      const p = d[src] || d.ekf; if (!p || d.true_vid < 0) continue;    // no PnP pose (odometry frame): autopilot pose
+      const truth = movingTruth(d.true_vid, r.sim_t) || INFO.targets[d.true_vid]; if (!truth) continue;
+      const e = dist(p, truth); if (e > 2000) continue;
       let t = tgt.get(d.true_vid);
       if (!t) { t = { n: 0, m: null }; tgt.set(d.true_vid, t); }
-      t.n++; t.e = e;                               // shown once seen 3 times (a single false alarm is not a target)
+      t.n++; t.e = e; t.p = p; t.last = r.t;
+      if (d.mov != null) { t.mov = d.mov; t.spd = d.spd; t.hdg = d.hdg; t.mvLast = r.t; }   // keep the last decided state
       if (t.m) t.m.setLatLng(p);
       else if (t.n >= 3) t.m = L.marker(p, { icon: L.divIcon({ className: "", iconSize: [9, 9], html: `<div class="tgt ${hasVisual ? "" : "bad"}"></div>` }), interactive: false }).addTo(L_.targets);
     }
   }
   tgtUpto = idx;
   const shown = [...tgt.values()].filter(t => t.m);
+  // moving vehicles seen in the last 4 s: arrow + speed
+  L_.movers.clearLayers();
+  const now = rows[idx].t, movers = shown.filter(t => t.mov && now - t.mvLast < 4);
+  for (const t of movers) {
+    L.marker(t.p, { interactive: false, zIndexOffset: 900, icon: L.divIcon({ className: "", iconSize: [0, 0], html:
+      `<div class="mv"><svg width="22" height="22" viewBox="0 0 22 22" style="transform:rotate(${t.hdg}deg)"><path d="M11 1 L18 19 L11 14 L4 19 Z" fill="#fb7185" stroke="#fff" stroke-width="1"/></svg><span>${Math.round(t.spd * 3.6)} km/h</span></div>` }) }).addTo(L_.movers);
+  }
   $("t_n").textContent = shown.length;
+  $("t_mv").textContent = shown.filter(t => t.mov).length;
   const es = shown.map(t => t.e).sort((a, b) => a - b);
   $("t_err").textContent = es.length ? fmtM(es[Math.floor(es.length / 2)]) : "—";
   $("t_err").style.color = es.length && es[Math.floor(es.length / 2)] > 50 ? "var(--bad)" : "var(--amber)";
+  if (THREE) v3.targets(shown, movers);
 }
 
-// ---------- baseline lookup (same time since jamming) ----------
 function baseErrAt(t) {
   if (!base || jamT == null || baseJamT == null) return null;
   const tb = baseJamT + (t - jamT);
@@ -299,28 +384,37 @@ function baseErrAt(t) {
   return base.ekf_err[lo];
 }
 
-// ---------- render ----------
+// ================= narrative =================
+function story(r, tj) {
+  const src = srcOf(r);
+  if (!r.jammed) return r.mode === "climb" ? "Climbing out. <b>GNSS is healthy</b>; visual navigation starts above 200 m."
+    : "<b>GNSS is healthy.</b> The camera is already matching the satellite map in the background, ready for the moment GNSS is lost.";
+  if (!hasVisual) return `GNSS jammed for <b>${mmss(tj)}</b>. This is the <b>control flight</b>: no visual navigation, the autopilot only has IMU + airspeed and <b>drifts</b>.`;
+  if (src === "map") return `GNSS jammed for <b>${mmss(tj)}</b>. Position comes from <b>matching the camera image to the satellite map</b> — ${r.inliers} matching points.`;
+  if (src === "vo") return `No map match right now (water, uniform ground or a turn). <b>Visual odometry</b> carries the position: ${Math.round(r.vo_dist || 0)} m flown since the last map fix.`;
+  let k = idx, gap = 0; while (k > 0 && !srcOf(rows[k]) && rows[k].jammed) k--; gap = r.t - rows[k].t;
+  return r.mode === "tilted" ? `Banked turn: the camera looks sideways, no map match. The autopilot coasts on IMU + airspeed (${gap.toFixed(0)} s).`
+    : `No visual position for <b>${gap.toFixed(0)} s</b> — the autopilot coasts on IMU + airspeed until the next match.`;
+}
+
+// ================= render =================
 function render() {
   const r = rows[idx]; if (!r) return;
-  const jammed = !!r.jammed, tj = jamT == null ? null : r.t - jamT;
-
-  // status pills
+  const jammed = !!r.jammed, tj = jamT == null ? null : r.t - jamT, src = srcOf(r);
   $("gnss").className = "pill " + (jammed ? "bad" : "ok");
-  $("gnss").lastChild.textContent = jammed ? `GNSS JAMMED · ${mmss(tj)}` : "GNSS NOMINAL";
-  let navCls = "dimmed", nav = "NAV · GNSS";
-  if (jammed && hasVisual) { navCls = "ours"; nav = { track: "NAV · VISUAL", global: "NAV · VISUAL · RELOCALIZING", tilted: "NAV · INERTIAL (BANKED)" }[r.mode] || "NAV · VISUAL"; }
-  else if (jammed) { navCls = "bad"; nav = "NAV · INERTIAL ONLY"; }
+  $("gnss").lastChild.textContent = jammed ? `GNSS JAMMED · ${mmss(tj)}` : "GNSS OK";
+  let navCls = "dimmed", nav = "POSITION · GNSS";
+  if (jammed && src === "map") { navCls = "ours"; nav = "POSITION · MAP MATCH"; }
+  else if (jammed && src === "vo") { navCls = "vo"; nav = "POSITION · ODOMETRY"; }
+  else if (jammed) { navCls = "bad"; nav = hasVisual ? "POSITION · COASTING" : "POSITION · INERTIAL ONLY"; }
   $("nav").className = "pill " + navCls; $("nav").lastChild.textContent = nav;
+  $("story").innerHTML = story(r, tj);
 
-  // hero metric
   const e = r.ekf_err;
   $("hero").innerHTML = e == null ? "—" : (e >= 1000 ? (e / 1000).toFixed(2) + "<small>km</small>" : e.toFixed(e >= 100 ? 0 : 1) + "<small>m</small>");
   $("hero").style.color = e > 50 ? "var(--bad)" : jammed && hasVisual ? "var(--ours)" : "var(--text)";
-  $("heroSub").textContent = jammed ? (hasVisual ? "autopilot fed by visual navigation" : "autopilot drifting on inertial sensors") : "autopilot with GNSS";
-
-  // comparison with the same flight without visual navigation
-  const be = jammed ? baseErrAt(r.t) : null;
-  const showCmp = be != null && be > (e ?? 0);    // the gap opens once the inertial-only run starts drifting
+  $("heroSub").textContent = jammed ? (hasVisual ? "where the autopilot thinks it is vs. truth" : "autopilot drifting on inertial sensors") : "autopilot with GNSS";
+  const be = jammed ? baseErrAt(r.t) : null, showCmp = be != null && be > (e ?? 0);
   $("compare").style.display = showCmp ? "block" : "none";
   if (showCmp) {
     const mx = Math.max(be, e, 1), sc = v => Math.max(2, 100 * Math.log10(1 + v) / Math.log10(1 + mx));
@@ -329,38 +423,39 @@ function render() {
     const k = be / Math.max(e, 1);
     $("factor").textContent = k >= 1.5 ? `${k >= 10 ? k.toFixed(0) : k.toFixed(1)}× more accurate` : "";
   }
-
-  // jam alert (once per playback through the jamming moment)
   if (jammed && !alertShown && tj != null && tj < 8 && playing) {
     alertShown = true; $("alert").querySelector(".l2").textContent = hasVisual ? "VISUAL NAVIGATION ENGAGED" : "INERTIAL ONLY · NO VISUAL NAVIGATION";
     $("alert").classList.add("show"); setTimeout(() => $("alert").classList.remove("show"), 3200);
   }
   if (!jammed) alertShown = false;
 
-  // camera mini stats
   $("m_alt").textContent = (r.alt ?? 0).toFixed(0) + "m";
   $("m_hdg").textContent = String(Math.round(((r.yaw ?? 0) + 360) % 360)).padStart(3, "0") + "°";
-  let n = 0, j = idx; while (j >= 0 && rows[j].t > r.t - 10) { n += rows[j].sent ? 1 : 0; j--; }
+  let n = 0, j = idx; while (j >= 0 && rows[j].t > r.t - 10) { n += srcOf(rows[j]) === "map" ? 1 : 0; j--; }
   $("m_rate").textContent = hasVisual ? (n / 10).toFixed(0) : "—";
   $("m_lat").textContent = hasVisual && r.latency != null ? (r.latency * 1000).toFixed(0) + "ms" : "—";
 
-  // map
-  const step = Math.max(1, Math.floor(idx / 1500)), tr = [], es = [];
-  for (let i = 0; i <= idx; i += step) { tr.push(rows[i].true); es.push(rows[i].ekf); }
-  tr.push(r.true); es.push(r.ekf);
-  L_.truth.setLatLngs(tr); L_.est.setLatLngs(es); L_.glow.setLatLngs(es);
+  // 2D map
+  const step = Math.max(1, Math.floor(idx / 1500)), tr = [], es = [], vo = [];
+  let seg = null;
+  for (let i = 0; i <= idx; i++) {
+    const q = rows[i];
+    if (i % step === 0 || i === idx) { tr.push(q.true); es.push(q.ekf); }
+    if (srcOf(q) === "vo") { if (!seg) { seg = []; vo.push(seg); if (i) seg.push(rows[i - 1].ekf); } seg.push(q.ekf); } else seg = null;
+  }
+  L_.truth.setLatLngs(tr); L_.est.setLatLngs(es); L_.glow.setLatLngs(es); L_.vo.setLatLngs(vo);
   const estColor = hasVisual || !jammed ? "#22d3ee" : "#f43f5e";
   L_.est.setStyle({ color: estColor }); L_.glow.setStyle({ color: estColor });
-  L_.foot.setLatLngs(footprint(r));
+  L_.foot.setLatLngs(footprintEN(r).map(toLL));
   L_.ac.setLatLng(r.true);
   const svg = document.getElementById("acsvg"); if (svg) svg.style.transform = `rotate(${r.yaw || 0}deg)`;
   const off = e > 15;
   L_.err.setLatLngs(off ? [r.true, r.ekf] : []);
   if (off) { L_.ghost.setLatLng(r.ekf); if (!map.hasLayer(L_.ghost)) L_.ghost.addTo(map); } else if (map.hasLayer(L_.ghost)) L_.ghost.remove();
   updateTargets();
-  if (follow) map.panTo(r.true, { animate: false });
+  if (follow && mode === "map") map.panTo(r.true, { animate: false });
+  if (THREE) v3.trails(tr.length);
 
-  // camera frame
   let k = idx; while (k >= 0 && !rows[k].frame) k--;
   if (k >= 0 && rows[k].frame !== camName) {
     camName = rows[k].frame; const row = rows[k];
@@ -375,37 +470,35 @@ function drawCam(row) {
   const cv = $("cam"), c = cv.getContext("2d");
   c.drawImage(camImg, 0, 0, cv.width, cv.height);
   const s = cv.width / INFO.camera.width;
-  c.lineWidth = 1.6;
+  c.lineWidth = 1.6; c.font = "600 10px JetBrains Mono";
   for (const d of row.dets || []) {
     const x = (d.u - d.w / 2) * s - 4, y = (d.v - d.h / 2) * s - 4, w = d.w * s + 8, h = d.h * s + 8, q = Math.min(5, w / 3);
-    c.strokeStyle = "#fbbf24"; c.beginPath();
+    c.strokeStyle = d.mov ? "#fb7185" : "#fbbf24"; c.beginPath();
     for (const [px, py, dx, dy] of [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]]) {
       c.moveTo(px + dx * q, py); c.lineTo(px, py); c.lineTo(px, py + dy * q);
     }
     c.stroke();
+    if (d.mov) { c.fillStyle = "#fb7185"; c.fillText(`${Math.round(d.spd * 3.6)} km/h`, x, y - 3); }
   }
-  const nd = (row.dets || []).length;
-  $("camL").textContent = `${nd} vehicle${nd === 1 ? "" : "s"}`;
+  const nd = (row.dets || []).length, nm = (row.dets || []).filter(d => d.mov).length;
+  $("camL").textContent = `${nd} vehicle${nd === 1 ? "" : "s"}` + (nm ? ` · ${nm} moving` : "");
   $("camR").textContent = hasVisual && row.inliers ? `${row.inliers} map matches` : "";
 }
 
-// ---------- timeline chart (also the scrubber) ----------
+// ================= timeline chart (also the scrubber) =================
 function drawChart() {
   const cv = $("chart"), dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
   if (cv.width !== W * dpr) { cv.width = W * dpr; cv.height = H * dpr; }
   const c = cv.getContext("2d"); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
   if (!rows.length) return;
-  const t0 = rows[0].t, t1 = rows[rows.length - 1].t, pad = 6;
+  const t0 = rows[0].t, t1 = rows[rows.length - 1].t, pad = 6, bot = H - 22;
   const X = t => pad + (t - t0) / Math.max(t1 - t0, 1) * (W - 2 * pad);
-  const yMax = Math.log10(2000), Y = v => H - 14 - (Math.log10(Math.max(v, 1)) / yMax) * (H - 24);
-  // grid
+  const yMax = Math.log10(2000), Y = v => bot - (Math.log10(Math.max(v, 1)) / yMax) * (bot - 10);
   c.font = "10px JetBrains Mono"; c.fillStyle = "#4b5563"; c.strokeStyle = "rgba(255,255,255,.05)";
   for (const v of [1, 10, 100, 1000]) { c.beginPath(); c.moveTo(pad, Y(v)); c.lineTo(W - pad, Y(v)); c.stroke(); c.fillText(v >= 1000 ? "1km" : v + "m", W - 34, Y(v) - 3); }
-  // jammed region
-  if (jamT != null) { c.fillStyle = "rgba(244,63,94,.06)"; c.fillRect(X(jamT), 0, W - pad - X(jamT), H - 14);
-    c.strokeStyle = "rgba(244,63,94,.6)"; c.setLineDash([3, 3]); c.beginPath(); c.moveTo(X(jamT), 0); c.lineTo(X(jamT), H - 14); c.stroke(); c.setLineDash([]);
+  if (jamT != null) { c.fillStyle = "rgba(244,63,94,.06)"; c.fillRect(X(jamT), 0, W - pad - X(jamT), bot);
+    c.strokeStyle = "rgba(244,63,94,.6)"; c.setLineDash([3, 3]); c.beginPath(); c.moveTo(X(jamT), 0); c.lineTo(X(jamT), bot); c.stroke(); c.setLineDash([]);
     c.fillStyle = "#f43f5e"; c.fillText("GNSS JAMMED", X(jamT) + 6, 10); }
-  // baseline
   if (base && jamT != null && baseJamT != null) {
     c.strokeStyle = "#f43f5e"; c.lineWidth = 1.6; c.beginPath(); let first = true;
     const st = Math.max(1, Math.floor(base.t.length / 1200));
@@ -413,21 +506,25 @@ function drawChart() {
       const x = X(t), y = Y(base.ekf_err[i]); first ? c.moveTo(x, y) : c.lineTo(x, y); first = false; }
     c.stroke();
   }
-  // ours (area)
   const st = Math.max(1, Math.floor(rows.length / 1200)), col = hasVisual ? "34,211,238" : "244,63,94";
-  const g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, `rgba(${col},.35)`); g.addColorStop(1, `rgba(${col},0)`);
-  c.beginPath(); c.moveTo(X(t0), H - 14);
+  const g = c.createLinearGradient(0, 0, 0, bot); g.addColorStop(0, `rgba(${col},.35)`); g.addColorStop(1, `rgba(${col},0)`);
+  c.beginPath(); c.moveTo(X(t0), bot);
   for (let i = 0; i < rows.length; i += st) c.lineTo(X(rows[i].t), Y(rows[i].ekf_err ?? 1));
-  c.lineTo(X(t1), H - 14); c.closePath(); c.fillStyle = g; c.fill();
+  c.lineTo(X(t1), bot); c.closePath(); c.fillStyle = g; c.fill();
   c.strokeStyle = `rgb(${col})`; c.lineWidth = 1.4; c.beginPath();
   for (let i = 0; i < rows.length; i += st) { const x = X(rows[i].t), y = Y(rows[i].ekf_err ?? 1); i ? c.lineTo(x, y) : c.moveTo(x, y); }
   c.stroke();
-  // dim the future, playhead
+  // position-source strip: where did the position come from at each moment?
+  for (let i = 1; i < rows.length; i++) {
+    const q = rows[i]; if (!q.jammed) continue;
+    const s = srcOf(q);
+    c.fillStyle = s === "map" ? "#22d3ee" : s === "vo" ? "#a78bfa" : "#f43f5e";
+    c.fillRect(X(rows[i - 1].t), bot + 2, Math.max(1, X(q.t) - X(rows[i - 1].t) + .5), 5);
+  }
   const px = X(rows[idx].t);
-  c.fillStyle = "rgba(7,9,12,.55)"; c.fillRect(px, 0, W - px, H - 14);
-  c.strokeStyle = "#e8edf3"; c.lineWidth = 1.5; c.beginPath(); c.moveTo(px, 0); c.lineTo(px, H - 14); c.stroke();
-  c.fillStyle = "#e8edf3"; c.beginPath(); c.arc(px, H - 14, 4, 0, 7); c.fill();
-  // time ticks
+  c.fillStyle = "rgba(7,9,12,.55)"; c.fillRect(px, 0, W - px, bot + 8);
+  c.strokeStyle = "#e8edf3"; c.lineWidth = 1.5; c.beginPath(); c.moveTo(px, 0); c.lineTo(px, bot + 8); c.stroke();
+  c.fillStyle = "#e8edf3"; c.beginPath(); c.arc(px, bot, 4, 0, 7); c.fill();
   c.fillStyle = "#4b5563"; for (let t = 0; t <= t1; t += 120) if (t >= t0) c.fillText(mmss(t), Math.max(0, X(t) - 14), H - 1);
 }
 
@@ -442,6 +539,179 @@ $("chart").onpointerdown = e => { dragging = true; $("chart").setPointerCapture(
 $("chart").onpointermove = e => { if (dragging) seek(e); };
 $("chart").onpointerup = () => dragging = false;
 
+// ================= 3D view =================
+const v3 = (() => {
+  if (!THREE) return null;
+  const SCALE = 8;                                  // aircraft drawn 8x larger than the 2 m Zephyr, to be visible
+  let renderer, scene, camera, controls, ground, ac, ghost, foot, frustum, trueLine, estLine, tgtGroup, camMode = "chase";
+  const camPos = new THREE.Vector3(), camLook = new THREE.Vector3();
+
+  function wing(color, opacity = 1) {
+    const g = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({ color, metalness: .25, roughness: .45, transparent: opacity < 1, opacity, depthWrite: opacity === 1 });
+    const s = new THREE.Shape();                     // flying wing, x = right, y = forward (metres, real size)
+    s.moveTo(0, .55); s.lineTo(1.0, -.12); s.lineTo(1.0, -.4); s.lineTo(.25, -.32); s.lineTo(0, -.22);
+    s.lineTo(-.25, -.32); s.lineTo(-1.0, -.4); s.lineTo(-1.0, -.12); s.closePath();
+    const geo = new THREE.ExtrudeGeometry(s, { depth: .05, bevelEnabled: true, bevelThickness: .02, bevelSize: .02, bevelSegments: 2 });
+    geo.rotateX(-Math.PI / 2); geo.translate(0, -.025, 0);   // shape y (forward) -> -z
+    g.add(new THREE.Mesh(geo, mat));
+    const pod = new THREE.Mesh(new THREE.CapsuleGeometry(.09, .55, 6, 12), mat);
+    pod.rotation.x = Math.PI / 2; pod.position.set(0, .04, -.05); g.add(pod);
+    for (const sx of [-1, 1]) {
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(.02, .22, .28), mat);
+      fin.position.set(sx * .99, .1, .26); g.add(fin);
+      if (opacity === 1) {
+        const light = new THREE.Mesh(new THREE.SphereGeometry(.035, 8, 8), new THREE.MeshBasicMaterial({ color: sx < 0 ? 0xff3344 : 0x33ff88 }));
+        light.position.set(sx * 1.0, .02, -.1); g.add(light);
+      }
+    }
+    if (opacity === 1) {
+      const prop = new THREE.Mesh(new THREE.CylinderGeometry(.22, .22, .01, 24), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .18 }));
+      prop.rotation.x = Math.PI / 2; prop.position.set(0, .04, .3); g.add(prop);
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.4, .012, .03), new THREE.MeshBasicMaterial({ color: 0x22d3ee }));
+      stripe.position.set(0, .035, -.08); g.add(stripe);
+    }
+    g.scale.setScalar(SCALE);
+    return g;
+  }
+
+  function skyTexture() {
+    const c = document.createElement("canvas"); c.width = 2; c.height = 256;
+    const x = c.getContext("2d"), gr = x.createLinearGradient(0, 0, 0, 256);
+    gr.addColorStop(0, "#5f8fc7"); gr.addColorStop(.55, "#a9c7e6"); gr.addColorStop(1, "#dfe9f3");
+    x.fillStyle = gr; x.fillRect(0, 0, 2, 256);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  }
+
+  function init() {
+    const el = $("three");
+    if (!renderer) {
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      el.appendChild(renderer.domElement);
+      window.addEventListener("resize", resize);
+    }
+    scene = new THREE.Scene();
+    scene.background = skyTexture();
+    scene.fog = new THREE.Fog(0xdfe9f3, 1400, 5200);
+    camera = new THREE.PerspectiveCamera(55, 1, 1, 20000);
+    scene.add(new THREE.HemisphereLight(0xdfefff, 0x404830, 1.4));
+    const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(800, 1500, 400); scene.add(sun);
+    // ground: the operation area's satellite map, outside it a muted plain
+    const b = INFO.bounds, sw = toEN(b[0]), ne = toEN(b[1]);
+    const tex = new THREE.TextureLoader().load(INFO.map_url);
+    tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    ground = new THREE.Mesh(new THREE.PlaneGeometry(ne[0] - sw[0], ne[1] - sw[1]), new THREE.MeshLambertMaterial({ map: tex }));
+    ground.rotation.x = -Math.PI / 2; ground.position.set((sw[0] + ne[0]) / 2, 0, -(sw[1] + ne[1]) / 2); scene.add(ground);
+    const outer = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), new THREE.MeshLambertMaterial({ color: 0x6b7356 }));
+    outer.rotation.x = -Math.PI / 2; outer.position.y = -.5; scene.add(outer);
+    ac = wing(0xe8edf3); scene.add(ac);
+    ghost = wing(0xf43f5e, .35); scene.add(ghost);
+    const fm = new THREE.MeshBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: .16, side: THREE.DoubleSide, depthWrite: false });
+    foot = new THREE.Mesh(new THREE.BufferGeometry(), fm); scene.add(foot);
+    frustum = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: .55 }));
+    scene.add(frustum);
+    trueLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: .75 }));
+    estLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x22d3ee }));
+    scene.add(trueLine, estLine);
+    tgtGroup = new THREE.Group(); scene.add(tgtGroup);
+    if (controls) controls.dispose();
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true; controls.enabled = camMode === "orbit";
+    camPos.set(0, 0, 0);
+    resize();
+  }
+
+  function resize() { if (!renderer) return; const w = innerWidth, h = innerHeight; renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+
+  const v = (en, up) => new THREE.Vector3(en[0], up, -en[1]);
+
+  function pose(a, b, f) {      // interpolated row values between rows a and b (f in [0,1])
+    const lerp = (x, y) => x + (y - x) * f;
+    const ang = (x, y) => { let d = ((y - x + 540) % 360) - 180; return x + d * f; };
+    const ea = toEN(a.true), eb = toEN(b.true), ka = toEN(a.ekf), kb = toEN(b.ekf);
+    return { en: [lerp(ea[0], eb[0]), lerp(ea[1], eb[1])], ekf: [lerp(ka[0], kb[0]), lerp(ka[1], kb[1])],
+             alt: lerp(a.alt || 0, b.alt || 0), yaw: ang(a.yaw || 0, b.yaw || 0),
+             roll: lerp(a.roll || 0, b.roll || 0), pitch: lerp(a.pitch || 0, b.pitch || 0) };
+  }
+
+  function orient(obj, p) {
+    const d = Math.PI / 180;
+    obj.rotation.set(p.pitch * d, -p.yaw * d, -p.roll * d, "YXZ");
+  }
+
+  function trails() {
+    if (!scene) return;
+    const step = Math.max(1, Math.floor(idx / 1500)), tp = [], ep = [];
+    for (let i = 0; i <= idx; i += step) { const q = rows[i]; tp.push(v(toEN(q.true), q.alt || 0)); ep.push(v(toEN(q.ekf), q.alt || 0)); }
+    trueLine.geometry.dispose(); trueLine.geometry = new THREE.BufferGeometry().setFromPoints(tp);
+    estLine.geometry.dispose(); estLine.geometry = new THREE.BufferGeometry().setFromPoints(ep);
+    estLine.material.color.set(hasVisual || !rows[idx].jammed ? 0x22d3ee : 0xf43f5e);
+  }
+
+  function targets(shown, movers) {
+    if (!scene) return;
+    tgtGroup.clear();
+    const dm = new THREE.MeshBasicMaterial({ color: hasVisual ? 0xfbbf24 : 0xf43f5e });
+    const dg = new THREE.OctahedronGeometry(7);
+    for (const t of shown) { if (t.mov) continue; const m = new THREE.Mesh(dg, dm); m.position.copy(v(toEN(t.p), 8)); tgtGroup.add(m); }
+    const cm = new THREE.MeshBasicMaterial({ color: 0xfb7185 }), cg = new THREE.ConeGeometry(7, 20, 12);
+    cg.rotateX(-Math.PI / 2);                         // cone points along -z = north before rotation
+    for (const t of movers) { const m = new THREE.Mesh(cg, cm); m.position.copy(v(toEN(t.p), 6)); m.rotation.y = -t.hdg * Math.PI / 180; tgtGroup.add(m); }
+  }
+
+  function frame() {
+    requestAnimationFrame(frame);
+    if (mode !== "3d" || !scene || !rows.length) return;
+    const a = rows[idx], b = rows[Math.min(idx + 1, rows.length - 1)];
+    const f = b.t > a.t ? Math.min(1, Math.max(0, (playT - a.t) / (b.t - a.t))) : 0;
+    const p = pose(a, b, playing ? f : 0);
+    ac.position.copy(v(p.en, p.alt)); orient(ac, p);
+    ghost.position.copy(v(p.ekf, p.alt)); orient(ghost, p);
+    ghost.visible = (a.ekf_err || 0) > 10;
+    // camera footprint + frustum
+    const fp = footprintEN({ ...a, true: toLL(p.en), alt: p.alt, yaw: p.yaw }).map(e => v(e, 1.5));
+    foot.geometry.dispose(); foot.geometry = new THREE.BufferGeometry().setFromPoints([fp[0], fp[1], fp[2], fp[0], fp[2], fp[3]]);
+    const o = ac.position;
+    frustum.geometry.dispose(); frustum.geometry = new THREE.BufferGeometry().setFromPoints(
+      [o, fp[0], o, fp[1], o, fp[2], o, fp[3], fp[0], fp[1], fp[1], fp[2], fp[2], fp[3], fp[3], fp[0]]);
+    // camera rig
+    const y = p.yaw * Math.PI / 180, fwd = new THREE.Vector3(Math.sin(y), 0, -Math.cos(y)), right = new THREE.Vector3(Math.cos(y), 0, Math.sin(y));
+    if (camMode === "orbit") {
+      const delta = o.clone().sub(controls.target); camera.position.add(delta); controls.target.copy(o); controls.update();
+    } else {
+      const want = camMode === "chase" ? o.clone().addScaledVector(fwd, -70).add(new THREE.Vector3(0, 20, 0))
+                                       : o.clone().addScaledVector(right, 140).add(new THREE.Vector3(0, 35, 0)).addScaledVector(fwd, 20);
+      const look = camMode === "chase" ? o.clone().addScaledVector(fwd, 60).add(new THREE.Vector3(0, -25, 0)) : o.clone();
+      if (camPos.lengthSq() === 0 || camPos.distanceTo(want) > 400) { camPos.copy(want); camLook.copy(look); }   // first frame or a seek
+      camPos.lerp(want, .08); camLook.lerp(look, .15);
+      camera.position.copy(camPos); camera.lookAt(camLook);
+    }
+    renderer.render(scene, camera);
+  }
+  requestAnimationFrame(frame);
+
+  function setCam(m) {
+    camMode = m; controls.enabled = m === "orbit";
+    if (m === "orbit") { controls.target.copy(ac.position); camera.position.copy(ac.position).add(new THREE.Vector3(120, 80, 120)); }
+    camPos.set(0, 0, 0);
+  }
+  return { init, trails, targets, setCam, resize };
+})();
+
+function setView(v) {
+  mode = v;
+  document.body.classList.toggle("mode3d", v === "3d");
+  document.querySelectorAll("#view button").forEach(b => b.classList.toggle("sel", b.dataset.v === v));
+  if (v === "3d" && v3) v3.resize();
+  if (v === "map" && map) { map.invalidateSize(); render(); }
+}
+document.querySelectorAll("#view button").forEach(b => b.onclick = () => setView(b.dataset.v));
+document.querySelectorAll("#camMode button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#camMode button").forEach(x => x.classList.toggle("sel", x === b)); v3 && v3.setCam(b.dataset.c);
+});
+
 function tick(ts) {
   if (playing && rows.length && !live) {
     playT += Math.min(ts - lastTs, 100) / 1000 * +$("speed").value;
@@ -452,7 +722,7 @@ function tick(ts) {
   }
   lastTs = ts; requestAnimationFrame(tick);
 }
-setInterval(async () => { if (live && RUN && await pull()) { idx = rows.length - 1; render(); } }, 1000);
+setInterval(async () => { if (live && RUN && await pull()) { idx = rows.length - 1; playT = rows[idx].t; render(); } }, 1000);
 
 $("run").onchange = e => { history.replaceState(null, "", "?run=" + e.target.value); openRun(e.target.value); };
 $("play").onclick = () => {
@@ -461,8 +731,11 @@ $("play").onclick = () => {
 };
 $("recenter").onclick = () => { follow = true; $("recenter").style.display = "none"; render(); };
 $("live").onclick = () => { live = !live; $("live").classList.toggle("on", live); if (live) { idx = rows.length - 1; render(); } };
-window.onresize = () => drawChart();
+$("helpBtn").onclick = () => $("help").classList.add("show");
+$("helpClose").onclick = () => { $("help").classList.remove("show"); try { localStorage.setItem("visnav_help", "1"); } catch (e) {} };
+window.addEventListener("resize", () => drawChart());
 document.onkeydown = e => { if (e.code === "Space" && e.target.tagName !== "SELECT") { e.preventDefault(); $("play").click(); } };
+try { if (!localStorage.getItem("visnav_help") && !new URLSearchParams(location.search).get("nohelp")) $("help").classList.add("show"); } catch (e) {}
 requestAnimationFrame(tick);
 loadRuns();
 </script>
